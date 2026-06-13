@@ -378,6 +378,26 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 
 	isOpenAIVideoAPI := strings.HasPrefix(c.Request.RequestURI, "/v1/videos/")
 
+	// DashScope 原生查询：返回 dashscope 原生格式（task.Data 已由轮询刷新为最新响应）
+	if c.GetBool("dashscope_native") {
+		adaptor := GetTaskAdaptor(originTask.Platform)
+		if adaptor == nil {
+			taskResp = service.TaskErrorWrapperLocal(fmt.Errorf("invalid channel id: %d", originTask.ChannelId), "invalid_channel_id", http.StatusBadRequest)
+			return
+		}
+		if converter, ok := adaptor.(channel.DashScopeNativeConverter); ok {
+			nativeData, err := converter.ConvertToDashScopeNative(originTask)
+			if err != nil {
+				taskResp = service.TaskErrorWrapper(err, "convert_to_dashscope_native_failed", http.StatusInternalServerError)
+				return
+			}
+			respBody = nativeData
+			return
+		}
+		taskResp = service.TaskErrorWrapperLocal(fmt.Errorf("not_implemented:%s", originTask.Platform), "not_implemented", http.StatusNotImplemented)
+		return
+	}
+
 	// Gemini/Vertex 支持实时查询：用户 fetch 时直接从上游拉取最新状态
 	if realtimeResp := tryRealtimeFetch(originTask, isOpenAIVideoAPI); len(realtimeResp) > 0 {
 		respBody = realtimeResp

@@ -49,4 +49,20 @@ func SetVideoRouter(router *gin.Engine) {
 		// Maps to: /?Action=CVSync2AsyncSubmitTask&Version=2022-08-31 and /?Action=CVSync2AsyncGetResult&Version=2022-08-31
 		jimengOfficialGroup.POST("/", controller.RelayTask)
 	}
+
+	// 阿里云百炼 DashScope 原生视频生成路径 - 客户端只需把 base_url 换成本平台即可。
+	// 提交与查询两端均返回 dashscope 原生格式，现有 dashscope 代码改 base_url 即可闭环。
+	dashScopeSubmitGroup := router.Group("/api/v1/services/aigc/video-generation")
+	dashScopeSubmitGroup.Use(middleware.RouteTag("relay"))
+	dashScopeSubmitGroup.Use(middleware.HappyHorseRequestConvert(), middleware.TokenAuth(), middleware.Distribute())
+	{
+		dashScopeSubmitGroup.POST("/video-synthesis", controller.RelayTask)
+	}
+
+	dashScopeFetchGroup := router.Group("/api/v1/tasks")
+	dashScopeFetchGroup.Use(middleware.RouteTag("relay"))
+	dashScopeFetchGroup.Use(middleware.HappyHorseFetchConvert(), middleware.TokenAuth(), middleware.Distribute())
+	{
+		dashScopeFetchGroup.GET("/:task_id", controller.RelayTaskFetch)
+	}
 }

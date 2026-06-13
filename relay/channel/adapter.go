@@ -81,3 +81,9 @@ type TaskAdaptor interface {
 type OpenAIVideoConverter interface {
 	ConvertToOpenAIVideo(originTask *model.Task) ([]byte, error)
 }
+
+// DashScopeNativeConverter 由支持 DashScope 原生响应格式的任务适配器实现，
+// 用于在原生查询路径下将存储的任务数据转换为 dashscope 原生结构。
+type DashScopeNativeConverter interface {
+	ConvertToDashScopeNative(originTask *model.Task) ([]byte, error)
+}
