@@ -17,6 +17,9 @@ import (
 // LogTaskConsumption 记录任务消费日志和统计信息（仅记录，不涉及实际扣费）。
 // 实际扣费已由 BillingSession（PreConsumeBilling + SettleBilling）完成。
 func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
+	if info.PriceData.Quota == 0 {
+		return
+	}
 	tokenName := c.GetString("token_name")
 	logContent := fmt.Sprintf("操作 %s", info.Action)
 	// 支持任务仅按次计费
@@ -37,6 +40,8 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	}
 	other := make(map[string]interface{})
 	other["is_task"] = true
+	other["task_id"] = info.PublicTaskID
+	other["task_status"] = string(model.TaskStatusSubmitted)
 	other["request_path"] = c.Request.URL.Path
 	other["model_price"] = info.PriceData.ModelPrice
 	if info.PriceData.ModelRatio > 0 {
@@ -124,13 +129,23 @@ func taskBillingOther(task *model.Task) map[string]interface{} {
 		if bc.ModelRatio > 0 {
 			other["model_ratio"] = bc.ModelRatio
 		}
-		other["group_ratio"] = bc.GroupRatio
+		if bc.GroupRatio > 0 {
+			other["group_ratio"] = bc.GroupRatio
+		}
 		if len(bc.OtherRatios) > 0 {
 			for k, v := range bc.OtherRatios {
 				other[k] = v
 			}
 		}
 	}
+	modelName := taskModelName(task)
+	if _, ok := other["model_ratio"]; !ok {
+		other["model_ratio"], _, _ = ratio_setting.GetModelRatio(modelName)
+	}
+	if _, ok := other["group_ratio"]; !ok {
+		other["group_ratio"] = ratio_setting.GetGroupRatio(task.Group)
+	}
+	other["completion_ratio"] = ratio_setting.GetCompletionRatio(modelName)
 	props := task.Properties
 	if props.UpstreamModelName != "" && props.UpstreamModelName != props.OriginModelName {
 		other["is_model_mapped"] = true
@@ -145,6 +160,63 @@ func taskModelName(task *model.Task) string {
 		return bc.OriginModelName
 	}
 	return task.Properties.OriginModelName
+}
+
+func SyncTaskStateLog(ctx context.Context, task *model.Task) {
+	if task == nil || task.PrivateData.RequestID == "" {
+		return
+	}
+
+	log, exist, err := model.GetLatestLogByRequestID(task.PrivateData.RequestID, []int{model.LogTypeConsume, model.LogTypeError})
+	if err != nil {
+		logger.LogWarn(ctx, fmt.Sprintf("get task lifecycle log failed (task=%s): %s", task.TaskID, err.Error()))
+		return
+	}
+	if !exist || log == nil {
+		return
+	}
+
+	other, _ := common.StrToMap(log.Other)
+	if other == nil {
+		other = make(map[string]interface{})
+	}
+	other["is_task"] = true
+	other["task_id"] = task.TaskID
+	other["task_status"] = string(task.Status)
+	if task.Progress != "" {
+		other["task_progress"] = task.Progress
+	}
+	if upstreamTaskID := task.GetUpstreamTaskID(); upstreamTaskID != "" && upstreamTaskID != task.TaskID {
+		other["upstream_task_id"] = upstreamTaskID
+	}
+	if task.FailReason != "" {
+		other["reason"] = task.FailReason
+	}
+	if task.PrivateData.ResultURL != "" {
+		other["result_url"] = task.PrivateData.ResultURL
+	}
+	log.Other = common.MapToJsonStr(other)
+	if task.PrivateData.UpstreamRequestID != "" {
+		log.UpstreamRequestId = task.PrivateData.UpstreamRequestID
+	}
+	if task.Status == model.TaskStatusFailure {
+		log.Type = model.LogTypeError
+	}
+	if err = model.UpdateLog(log); err != nil {
+		logger.LogWarn(ctx, fmt.Sprintf("update task lifecycle log failed (task=%s): %s", task.TaskID, err.Error()))
+	}
+}
+
+func rollbackTaskUsageStats(task *model.Task, quota int) {
+	if task == nil || quota <= 0 || task.PrivateData.RequestID == "" {
+		return
+	}
+	log, exist, err := model.GetLatestLogByRequestID(task.PrivateData.RequestID, []int{model.LogTypeConsume, model.LogTypeError})
+	if err != nil || !exist || log == nil || log.Type == model.LogTypeError {
+		return
+	}
+	model.UpdateUserUsedQuota(task.UserId, -quota)
+	model.UpdateChannelUsedQuota(task.ChannelId, -quota)
 }
 
 // RefundTaskQuota 统一的任务失败退款逻辑。
@@ -163,10 +235,13 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) {
 
 	// 2. 退还令牌额度
 	taskAdjustTokenQuota(ctx, task, -quota)
+	rollbackTaskUsageStats(task, quota)
+	SyncTaskStateLog(ctx, task)
 
 	// 3. 记录日志
 	other := taskBillingOther(task)
 	other["task_id"] = task.TaskID
+	other["task_status"] = string(task.Status)
 	other["reason"] = reason
 	model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
 		UserId:    task.UserId,
@@ -226,9 +301,11 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 	} else {
 		logType = model.LogTypeRefund
 		logQuota = -quotaDelta
+		rollbackTaskUsageStats(task, -quotaDelta)
 	}
 	other := taskBillingOther(task)
 	other["task_id"] = task.TaskID
+	other["task_status"] = string(task.Status)
 	other["pre_consumed_quota"] = preConsumedQuota
 	other["actual_quota"] = actualQuota
 	model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
@@ -255,9 +332,9 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 	modelName := taskModelName(task)
 
 	// 获取模型价格和倍率
-	modelRatio, hasRatioSetting, _ := ratio_setting.GetModelRatio(modelName)
-	// 只有配置了倍率(非固定价格)时才按 token 重新计费
-	if !hasRatioSetting || modelRatio <= 0 {
+	modelRatio, _, _ := ratio_setting.GetModelRatio(modelName)
+	// 不再依赖 hasRatioSetting，避免 AcceptUnsetRatioModel 场景下任务变相免费
+	if modelRatio <= 0 {
 		return
 	}
 

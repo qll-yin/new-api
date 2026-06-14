@@ -96,7 +96,6 @@ const PricingCardView = ({
     rowSelection?.onChange?.(newKeys, null);
   };
 
-  // 获取模型图标
   const getModelIcon = (model) => {
     if (!model || !model.model_name) {
       return (
@@ -105,7 +104,6 @@ const PricingCardView = ({
         </div>
       );
     }
-    // 1) 优先使用模型自定义图标
     if (model.icon) {
       return (
         <div className={CARD_STYLES.container}>
@@ -115,7 +113,6 @@ const PricingCardView = ({
         </div>
       );
     }
-    // 2) 退化为供应商图标
     if (model.vendor_icon) {
       return (
         <div className={CARD_STYLES.container}>
@@ -125,8 +122,6 @@ const PricingCardView = ({
         </div>
       );
     }
-
-    // 如果没有供应商图标，使用模型名称生成头像
 
     const avatarText = model.model_name.slice(0, 2).toUpperCase();
     return (
@@ -147,20 +142,22 @@ const PricingCardView = ({
     );
   };
 
-  // 获取模型描述
-  const getModelDescription = (record) => {
-    return record.description || '';
-  };
+  const getModelDescription = (record) => record.description || '';
 
-  // 渲染标签
   const renderTags = (record) => {
-    // 计费类型标签（左边）
     let billingTag = (
       <Tag key='billing' shape='circle' color='white' size='small'>
         -
       </Tag>
     );
-    if (record.quota_type === 1) {
+
+    if (record.billing_mode === 'video') {
+      billingTag = (
+        <Tag key='billing' shape='circle' color='indigo' size='small'>
+          {t('视频计费')}
+        </Tag>
+      );
+    } else if (record.quota_type === 1) {
       billingTag = (
         <Tag key='billing' shape='circle' color='teal' size='small'>
           {t('按次计费')}
@@ -174,7 +171,6 @@ const PricingCardView = ({
       );
     }
 
-    // 自定义标签（右边）
     const customTags = [];
     if (record.tags) {
       const tagArr = record.tags.split(',').filter(Boolean);
@@ -202,7 +198,7 @@ const PricingCardView = ({
                 key: `custom-${idx}`,
                 element: tag,
               })),
-              renderItem: (item, idx) => item.element,
+              renderItem: (item) => item.element,
               maxDisplay: 3,
             })}
         </div>
@@ -210,7 +206,6 @@ const PricingCardView = ({
     );
   };
 
-  // 显示骨架屏
   if (showSkeleton) {
     return (
       <PricingCardSkeleton
@@ -259,7 +254,6 @@ const PricingCardView = ({
               onClick={() => openModelDetail && openModelDetail(model)}
             >
               <div className='flex flex-col h-full'>
-                {/* 头部：图标 + 模型名称 + 操作按钮 */}
                 <div className='flex items-start justify-between mb-3'>
                   <div className='flex items-start space-x-3 flex-1 min-w-0'>
                     {getModelIcon(model)}
@@ -269,7 +263,11 @@ const PricingCardView = ({
                       </h3>
                       <div className='flex flex-col gap-1 text-xs mt-1'>
                         {priceData.isDynamicPricing ? (
-                          formatDynamicPriceSummary(priceData.billingExpr, t, priceData.usedGroupRatio)
+                          formatDynamicPriceSummary(
+                            priceData.billingExpr,
+                            t,
+                            priceData.usedGroupRatio,
+                          )
                         ) : (
                           formatPriceInfo(priceData, t, siteDisplayType)
                         )}
@@ -278,7 +276,6 @@ const PricingCardView = ({
                   </div>
 
                   <div className='flex items-center space-x-2 ml-3'>
-                    {/* 复制按钮 */}
                     <Button
                       size='small'
                       theme='outline'
@@ -290,7 +287,6 @@ const PricingCardView = ({
                       }}
                     />
 
-                    {/* 选择框 */}
                     {rowSelection && (
                       <Checkbox
                         checked={isSelected}
@@ -303,7 +299,6 @@ const PricingCardView = ({
                   </div>
                 </div>
 
-                {/* 模型描述 - 占据剩余空间 */}
                 <div className='flex-1 mb-4'>
                   <p
                     className='text-xs line-clamp-2 leading-relaxed'
@@ -313,21 +308,16 @@ const PricingCardView = ({
                   </p>
                 </div>
 
-                {/* 底部区域 */}
                 <div className='mt-auto'>
-                  {/* 标签区域 */}
                   {renderTags(model)}
 
-                  {/* 倍率信息（可选） */}
                   {showRatio && (
                     <div className='pt-3'>
                       <div className='flex items-center space-x-1 mb-2'>
                         <span className='text-xs font-medium text-gray-700'>
                           {t('倍率信息')}
                         </span>
-                        <Tooltip
-                          content={t('倍率是为了方便换算不同价格的模型')}
-                        >
+                        <Tooltip content={t('倍率用于方便换算不同价格的模型')}>
                           <IconHelpCircle
                             className='text-blue-500 cursor-pointer'
                             size='small'
@@ -363,7 +353,6 @@ const PricingCardView = ({
         })}
       </div>
 
-      {/* 分页 */}
       {filteredModels.length > 0 && (
         <div className='flex justify-center mt-6 py-4 border-t pricing-pagination-divider'>
           <Pagination

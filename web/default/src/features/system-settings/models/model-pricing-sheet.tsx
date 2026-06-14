@@ -66,16 +66,20 @@ import {
   EMPTY_LANE_PRICES,
   buildPreviewRows,
   createInitialLaneState,
+  createInitialVideoState,
   createModelPricingSchema,
   hasValue,
   laneConfigs,
   numericDraftRegex,
+  normalizeVideoResolution,
   ratioFieldByLane,
   toNumberOrNull,
   type LaneKey,
   type ModelPricingFormValues,
   type ModelRatioData,
   type PricingMode,
+  type VideoResolution,
+  videoResolutionOrder,
 } from './model-pricing-core'
 import { PriceInput, PriceLane } from './model-pricing-inputs'
 import { formatPricingNumber } from './pricing-format'
@@ -153,6 +157,16 @@ export const ModelPricingEditorPanel = forwardRef<
   })
   const [billingExpr, setBillingExpr] = useState('')
   const [requestRuleExpr, setRequestRuleExpr] = useState('')
+  const [videoBaseResolution, setVideoBaseResolution] =
+    useState<VideoResolution>('720P')
+  const [videoBasePrice, setVideoBasePrice] = useState('')
+  const [videoResolutionPrices, setVideoResolutionPrices] = useState<
+    Record<VideoResolution, string>
+  >({
+    '480P': '',
+    '720P': '',
+    '1080P': '',
+  })
   const isEditMode = !!editData
 
   const form = useForm<ModelPricingFormValues>({
@@ -172,6 +186,7 @@ export const ModelPricingEditorPanel = forwardRef<
 
   useEffect(() => {
     const nextLaneState = createInitialLaneState(editData)
+    const nextVideoState = createInitialVideoState(editData)
 
     if (editData) {
       form.reset({
@@ -186,7 +201,9 @@ export const ModelPricingEditorPanel = forwardRef<
         audioCompletionRatio: editData.audioCompletionRatio || '',
       })
       setPricingMode(
-        editData.billingMode === 'tiered_expr'
+        editData.billingMode === 'video'
+          ? 'video'
+          : editData.billingMode === 'tiered_expr'
           ? 'tiered_expr'
           : editData.price
             ? 'per-request'
@@ -214,6 +231,9 @@ export const ModelPricingEditorPanel = forwardRef<
     setPromptPrice(nextLaneState.promptPrice)
     setLanePrices(nextLaneState.prices)
     setLaneEnabled(nextLaneState.enabled)
+    setVideoBaseResolution(nextVideoState.baseResolution)
+    setVideoBasePrice(nextVideoState.basePrice)
+    setVideoResolutionPrices(nextVideoState.resolutionPrices)
   }, [editData, form])
 
   const setFormValue = (field: keyof ModelPricingFormValues, value: string) => {
@@ -336,6 +356,49 @@ export const ModelPricingEditorPanel = forwardRef<
     }
   }
 
+  const syncVideoPrices = (
+    nextBaseResolution = videoBaseResolution,
+    nextBasePrice = videoBasePrice,
+    nextResolutionPrices = videoResolutionPrices
+  ) => {
+    setVideoBaseResolution(nextBaseResolution)
+    setVideoBasePrice(nextBasePrice)
+    setVideoResolutionPrices(nextResolutionPrices)
+  }
+
+  const handleVideoBaseResolutionChange = (value: string) => {
+    const normalized = normalizeVideoResolution(value) as VideoResolution
+    if (!normalized) return
+    const nextBasePrice = videoResolutionPrices[normalized] || videoBasePrice
+    const nextPrices = {
+      ...videoResolutionPrices,
+      [normalized]: nextBasePrice,
+    }
+    syncVideoPrices(normalized, nextBasePrice, nextPrices)
+  }
+
+  const handleVideoBasePriceChange = (value: string) => {
+    if (!numericDraftRegex.test(value)) return
+    const nextPrices = {
+      ...videoResolutionPrices,
+      [videoBaseResolution]: value,
+    }
+    syncVideoPrices(videoBaseResolution, value, nextPrices)
+  }
+
+  const handleVideoResolutionPriceChange = (
+    resolution: VideoResolution,
+    value: string
+  ) => {
+    if (!numericDraftRegex.test(value)) return
+    const nextPrices = { ...videoResolutionPrices, [resolution]: value }
+    if (resolution === videoBaseResolution) {
+      syncVideoPrices(videoBaseResolution, value, nextPrices)
+      return
+    }
+    syncVideoPrices(videoBaseResolution, videoBasePrice, nextPrices)
+  }
+
   const watchedValues = form.watch()
   const previewRows = useMemo(
     () =>
@@ -347,6 +410,9 @@ export const ModelPricingEditorPanel = forwardRef<
         promptPrice,
         lanePrices,
         laneEnabled,
+        videoBaseResolution,
+        videoBasePrice,
+        videoResolutionPrices,
         t
       ),
     [
@@ -356,6 +422,9 @@ export const ModelPricingEditorPanel = forwardRef<
       pricingMode,
       promptPrice,
       requestRuleExpr,
+      videoBasePrice,
+      videoBaseResolution,
+      videoResolutionPrices,
       t,
       watchedValues,
     ]
@@ -403,8 +472,12 @@ export const ModelPricingEditorPanel = forwardRef<
       nextWarnings.push(t('Audio output price requires an audio input price.'))
     }
 
+    if (pricingMode === 'video' && toNumberOrNull(videoBasePrice) === null) {
+      nextWarnings.push(t('Video base price is required.'))
+    }
+
     return nextWarnings
-  }, [editData, laneEnabled, lanePrices, pricingMode, promptPrice, t])
+  }, [editData, laneEnabled, lanePrices, pricingMode, promptPrice, t, videoBasePrice])
 
   const validatePricingValues = useCallback(() => {
     if (
@@ -431,15 +504,23 @@ export const ModelPricingEditorPanel = forwardRef<
       return false
     }
 
+    if (pricingMode === 'video' && toNumberOrNull(videoBasePrice) === null) {
+      form.setError('price', {
+        message: t('Video base price is required.'),
+      })
+      return false
+    }
+
     return true
-  }, [form, laneEnabled, lanePrices, pricingMode, promptPrice, t])
+  }, [form, laneEnabled, lanePrices, pricingMode, promptPrice, t, videoBasePrice])
 
   const buildSubmitData = useCallback(
     (values: ModelPricingFormValues) => {
       const data: ModelRatioData = {
         name: values.name.trim(),
         billingMode: pricingMode,
-        price: values.price || '',
+        price:
+          pricingMode === 'video' ? videoBasePrice : values.price || '',
         ratio: values.ratio || '',
         cacheRatio: values.cacheRatio || '',
         createCacheRatio: values.createCacheRatio || '',
@@ -452,11 +533,33 @@ export const ModelPricingEditorPanel = forwardRef<
       if (pricingMode === 'tiered_expr') {
         data.billingExpr = billingExpr
         data.requestRuleExpr = requestRuleExpr
+      } else if (pricingMode === 'video') {
+        const basePriceNumber = toNumberOrNull(videoBasePrice)
+        const resolutionMultipliers: Record<string, string> = {}
+        videoResolutionOrder.forEach((resolution) => {
+          if (resolution === videoBaseResolution) return
+          const resolutionPrice = toNumberOrNull(videoResolutionPrices[resolution])
+          if (basePriceNumber === null || resolutionPrice === null) return
+          resolutionMultipliers[resolution] = formatPricingNumber(
+            resolutionPrice / basePriceNumber
+          )
+        })
+        data.videoConfig = {
+          baseResolution: videoBaseResolution,
+          resolutionMultipliers,
+        }
       }
 
       return data
     },
-    [billingExpr, pricingMode, requestRuleExpr]
+    [
+      billingExpr,
+      pricingMode,
+      requestRuleExpr,
+      videoBasePrice,
+      videoBaseResolution,
+      videoResolutionPrices,
+    ]
   )
 
   useImperativeHandle(
@@ -540,7 +643,7 @@ export const ModelPricingEditorPanel = forwardRef<
                   onValueChange={handleModeChange}
                   className='gap-4'
                 >
-                  <TabsList className='grid w-full grid-cols-3'>
+                  <TabsList className='grid w-full grid-cols-4'>
                     <TabsTrigger value='per-token'>
                       {t('Per-token')}
                     </TabsTrigger>
@@ -550,6 +653,7 @@ export const ModelPricingEditorPanel = forwardRef<
                     <TabsTrigger value='tiered_expr'>
                       {t('Expression')}
                     </TabsTrigger>
+                    <TabsTrigger value='video'>{t('Video')}</TabsTrigger>
                   </TabsList>
 
                   <TabsContent value='per-token' className='pt-0'>
@@ -644,6 +748,80 @@ export const ModelPricingEditorPanel = forwardRef<
                         onBillingExprChange={setBillingExpr}
                         onRequestRuleExprChange={setRequestRuleExpr}
                       />
+                    </FieldGroup>
+                  </TabsContent>
+
+                  <TabsContent value='video' className='pt-0'>
+                    <FieldGroup className='gap-5'>
+                      <Field>
+                        <FieldLabel>{t('Video base price')}</FieldLabel>
+                        <PriceInput
+                          value={videoBasePrice}
+                          placeholder='0.14'
+                          onChange={handleVideoBasePriceChange}
+                        />
+                        <FieldDescription>
+                          {t(
+                            'USD price per generated second at the base resolution.'
+                          )}
+                        </FieldDescription>
+                      </Field>
+
+                      <FieldGroup className='gap-3'>
+                        <Field>
+                          <FieldLabel>{t('Base resolution')}</FieldLabel>
+                          <div className='grid grid-cols-3 gap-2'>
+                            {videoResolutionOrder.map((resolution) => (
+                              <Button
+                                key={resolution}
+                                type='button'
+                                variant={
+                                  videoBaseResolution === resolution
+                                    ? 'default'
+                                    : 'outline'
+                                }
+                                onClick={() =>
+                                  handleVideoBaseResolutionChange(resolution)
+                                }
+                              >
+                                {resolution}
+                              </Button>
+                            ))}
+                          </div>
+                          <FieldDescription>
+                            {t(
+                              'The base price above is treated as the per-second price for this resolution.'
+                            )}
+                          </FieldDescription>
+                        </Field>
+
+                        <div className='grid gap-3 sm:grid-cols-3'>
+                          {videoResolutionOrder.map((resolution) => (
+                            <Field key={resolution}>
+                              <FieldLabel>
+                                {t('{{resolution}} price', { resolution })}
+                              </FieldLabel>
+                              <PriceInput
+                                value={videoResolutionPrices[resolution]}
+                                placeholder='0.14'
+                                onChange={(value) =>
+                                  handleVideoResolutionPriceChange(
+                                    resolution,
+                                    value
+                                  )
+                                }
+                              />
+                              <FieldDescription>
+                                {resolution === videoBaseResolution
+                                  ? t('Uses the base video price.')
+                                  : t(
+                                      'Optional per-second price override for this resolution.'
+                                    )}
+                              </FieldDescription>
+                            </Field>
+                          ))}
+                        </div>
+                      </FieldGroup>
                     </FieldGroup>
                   </TabsContent>
                 </Tabs>

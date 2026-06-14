@@ -44,6 +44,8 @@ import { useTranslation } from 'react-i18next';
 import {
   PAGE_SIZE,
   PRICE_SUFFIX,
+  VIDEO_PRICE_SUFFIX,
+  VIDEO_RESOLUTIONS,
   buildSummaryText,
   hasValue,
   useModelPricingEditorState,
@@ -84,6 +86,19 @@ const PriceInput = ({
     ) : null}
   </div>
 );
+
+const getBillingModeColor = (billingMode) => {
+  switch (billingMode) {
+    case 'per-request':
+      return 'teal';
+    case 'tiered_expr':
+      return 'amber';
+    case 'video':
+      return 'indigo';
+    default:
+      return 'violet';
+  }
+};
 
 export default function ModelPricingEditor({
   options,
@@ -126,6 +141,9 @@ export default function ModelPricingEditor({
     handleBillingModeChange,
     handleBillingExprChange,
     handleRequestRuleExprChange,
+    handleVideoBaseResolutionChange,
+    handleVideoBasePriceChange,
+    handleVideoResolutionPriceChange,
     handleSubmit,
     addModel,
     deleteModel,
@@ -138,14 +156,26 @@ export default function ModelPricingEditor({
     filterMode,
   });
 
-  const getExprModeLabel = useCallback((model) => {
-    if (model?.billingMode !== 'tiered_expr') {
-      return '';
-    }
-    return (model.billingExpr || '').includes('tier(')
-      ? t('阶梯计费')
-      : t('表达式计费');
-  }, [t]);
+  const getExprModeLabel = useCallback(
+    (model) => {
+      if (model?.billingMode !== 'tiered_expr') return '';
+      return (model.billingExpr || '').includes('tier(')
+        ? t('阶梯计费')
+        : t('表达式计费');
+    },
+    [t],
+  );
+
+  const getBillingModeLabel = useCallback(
+    (model) => {
+      if (!model) return '';
+      if (model.billingMode === 'per-request') return t('按次计费');
+      if (model.billingMode === 'tiered_expr') return getExprModeLabel(model);
+      if (model.billingMode === 'video') return t('视频计费');
+      return t('按量计费');
+    },
+    [getExprModeLabel, t],
+  );
 
   const columns = useMemo(
     () => [
@@ -176,7 +206,7 @@ export default function ModelPricingEditor({
             ) : null}
             {record.hasConflict ? (
               <Tag color='red' shape='circle'>
-                {t('矛盾')}
+                {t('冲突')}
               </Tag>
             ) : null}
           </Space>
@@ -187,20 +217,8 @@ export default function ModelPricingEditor({
         dataIndex: 'billingMode',
         key: 'billingMode',
         render: (_, record) => (
-          <Tag
-            color={
-              record.billingMode === 'per-request'
-                ? 'teal'
-                : record.billingMode === 'tiered_expr'
-                  ? 'amber'
-                  : 'violet'
-            }
-          >
-            {record.billingMode === 'per-request'
-              ? t('按次计费')
-              : record.billingMode === 'tiered_expr'
-                ? getExprModeLabel(record)
-                : t('按量计费')}
+          <Tag color={getBillingModeColor(record.billingMode)}>
+            {getBillingModeLabel(record)}
           </Tag>
         ),
       },
@@ -230,7 +248,7 @@ export default function ModelPricingEditor({
     [
       allowDeleteModel,
       deleteModel,
-      getExprModeLabel,
+      getBillingModeLabel,
       selectedModelName,
       selectedModelNames,
       setSelectedModelName,
@@ -293,7 +311,7 @@ export default function ModelPricingEditor({
               checked={conflictOnly}
               onChange={(event) => setConflictOnly(event.target.checked)}
             >
-              {t('仅显示矛盾倍率')}
+              {t('仅显示冲突配置')}
             </Checkbox>
           ) : null}
         </Space>
@@ -376,20 +394,8 @@ export default function ModelPricingEditor({
             title={selectedModel ? selectedModel.name : t('模型计费编辑器')}
             headerExtraContent={
               selectedModel ? (
-                <Tag
-                  color={
-                    selectedModel.billingMode === 'per-request'
-                      ? 'teal'
-                      : selectedModel.billingMode === 'tiered_expr'
-                        ? 'amber'
-                        : 'blue'
-                  }
-                >
-                  {selectedModel.billingMode === 'per-request'
-                    ? t('按次计费')
-                    : selectedModel.billingMode === 'tiered_expr'
-                      ? getExprModeLabel(selectedModel)
-                      : t('按量计费')}
+                <Tag color={getBillingModeColor(selectedModel.billingMode)}>
+                  {getBillingModeLabel(selectedModel)}
                 </Tag>
               ) : null
             }
@@ -398,7 +404,7 @@ export default function ModelPricingEditor({
               <Empty
                 title={emptyTitle || t('暂无模型')}
                 description={
-                  emptyDescription || t('请先新增模型或从左侧列表选择一个模型')
+                  emptyDescription || t('请先新增模型，或从左侧列表选择一个模型')
                 }
               />
             ) : (
@@ -414,11 +420,12 @@ export default function ModelPricingEditor({
                   >
                     <Radio value='per-token'>{t('按量计费')}</Radio>
                     <Radio value='per-request'>{t('按次计费')}</Radio>
-                    <Radio value='tiered_expr'>{t('表达式/阶梯计费')}</Radio>
+                    <Radio value='video'>{t('视频计费')}</Radio>
+                    <Radio value='tiered_expr'>{t('表达式 / 阶梯计费')}</Radio>
                   </RadioGroup>
                   <div className='mt-2 text-xs text-gray-500'>
                     {t(
-                      '普通按量/按次直接填价格就行；如果价格要跟请求参数或请求头联动，请切到表达式/阶梯计费。',
+                      '普通文本模型用按量或按次即可；视频模型请切到视频计费；如果价格需要跟请求参数或请求头联动，请切到表达式 / 阶梯计费。',
                     )}
                   </div>
                 </div>
@@ -447,8 +454,64 @@ export default function ModelPricingEditor({
                     placeholder={t('输入每次调用价格')}
                     suffix={t('$/次')}
                     onChange={(value) => handleNumericFieldChange('fixedPrice', value)}
-                    extraText={t('适合 MJ / 任务类等按次收费模型。')}
+                    extraText={t('适合 MJ、异步任务等按次收费模型。')}
                   />
+                ) : selectedModel.billingMode === 'video' ? (
+                  <Card
+                    bodyStyle={{ padding: 16 }}
+                    style={{
+                      marginBottom: 16,
+                      background: 'var(--semi-color-fill-0)',
+                    }}
+                  >
+                    <div className='font-medium mb-3'>{t('视频计费')}</div>
+                    <PriceInput
+                      label={t('视频基础单价')}
+                      value={selectedModel.videoBasePrice}
+                      placeholder={t('输入 $/second，例如 0.14')}
+                      suffix={VIDEO_PRICE_SUFFIX}
+                      onChange={(value) => handleVideoBasePriceChange(value)}
+                      extraText={t('基准分辨率下每秒生成视频的美元价格。')}
+                    />
+                    <div style={{ marginBottom: 16 }}>
+                      <div className='mb-1 font-medium text-gray-700'>
+                        {t('基准分辨率')}
+                      </div>
+                      <RadioGroup
+                        type='button'
+                        value={selectedModel.videoBaseResolution}
+                        onChange={(event) =>
+                          handleVideoBaseResolutionChange(event.target.value)
+                        }
+                      >
+                        {VIDEO_RESOLUTIONS.map((resolution) => (
+                          <Radio key={resolution} value={resolution}>
+                            {resolution}
+                          </Radio>
+                        ))}
+                      </RadioGroup>
+                      <div className='mt-2 text-xs text-gray-500'>
+                        {t('上面的基础单价会作为该分辨率的每秒价格。')}
+                      </div>
+                    </div>
+                    {VIDEO_RESOLUTIONS.map((resolution) => (
+                      <PriceInput
+                        key={resolution}
+                        label={t('{{resolution}} 单价', { resolution })}
+                        value={selectedModel.videoResolutionPrices?.[resolution] || ''}
+                        placeholder={t('可选：不填则使用基础单价')}
+                        suffix={VIDEO_PRICE_SUFFIX}
+                        onChange={(value) =>
+                          handleVideoResolutionPriceChange(resolution, value)
+                        }
+                        extraText={
+                          resolution === selectedModel.videoBaseResolution
+                            ? t('当前基准分辨率，使用基础视频单价。')
+                            : t('可为该分辨率单独设置每秒单价。')
+                        }
+                      />
+                    ))}
+                  </Card>
                 ) : selectedModel.billingMode === 'tiered_expr' ? (
                   <TieredPricingEditor
                     model={selectedModel}
@@ -482,7 +545,7 @@ export default function ModelPricingEditor({
                           style={{ marginBottom: 12 }}
                           title={t('补全价格已锁定')}
                           description={t(
-                            '该模型补全倍率由后端固定为 {{ratio}}。补全价格不能在这里修改。',
+                            '该模型补全倍率由后端固定为 {{ratio}}，补全价格不能在这里修改。',
                             {
                               ratio: selectedModel.lockedCompletionRatio || '-',
                             },
@@ -704,21 +767,19 @@ export default function ModelPricingEditor({
                 >
                   <div className='font-medium mb-3'>{t('保存预览')}</div>
                   <div className='text-xs text-gray-500 mb-3'>
-                    {t(
-                      '下面展示这个模型保存后会写入哪些后端字段，便于和原始 JSON 编辑框保持一致。',
-                    )}
+                    {t('下面展示这个模型保存后会写入哪些后端字段，便于和原始 JSON 编辑框保持一致。')}
                   </div>
                   <div
                     style={{
                       display: 'grid',
-                      gridTemplateColumns: 'minmax(140px, 180px) 1fr',
+                      gridTemplateColumns: 'minmax(220px, 280px) minmax(0, 1fr)',
                       gap: 8,
                     }}
                   >
                     {previewRows.map((row) => (
                       <React.Fragment key={row.key}>
                         <Text strong>{row.label}</Text>
-                        <Text>{row.value}</Text>
+                        <Text style={{ overflowWrap: 'anywhere' }}>{row.value}</Text>
                       </React.Fragment>
                     ))}
                   </div>
@@ -759,20 +820,15 @@ export default function ModelPricingEditor({
       >
         <div className='text-sm text-gray-600'>
           {selectedModel
-            ? t(
-                '将把当前编辑中的模型 {{name}} 的价格配置，批量应用到已勾选的 {{count}} 个模型。',
-                {
-                  name: selectedModel.name,
-                  count: selectedModelNames.length,
-                },
-              )
+            ? t('将把当前编辑中的模型 {{name}} 的价格配置，批量应用到已勾选的 {{count}} 个模型。', {
+                name: selectedModel.name,
+                count: selectedModelNames.length,
+              })
             : t('请先选择一个作为模板的模型')}
         </div>
         {selectedModel ? (
           <div className='text-xs text-gray-500 mt-3'>
-            {t(
-              '适合同系列模型一起定价，例如把 gpt-5.1 的价格批量同步到 gpt-5.1-high、gpt-5.1-low 等模型。',
-            )}
+            {t('适合同系列模型一起定价，例如把 gpt-5.1 的价格批量同步到 gpt-5.1-high、gpt-5.1-low 等模型。')}
           </div>
         ) : null}
       </Modal>

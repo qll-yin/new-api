@@ -509,16 +509,46 @@ export const useLogsData = () => {
           });
         }
       }
-      if (logs[i].type === 6) {
+      if (other?.is_task === true || other?.task_id != null) {
         if (other?.task_id) {
           expandDataLocal.push({
-            key: t('任务ID'),
+            key: t('Task ID'),
             value: other.task_id,
+          });
+        }
+        if (other?.upstream_task_id && other.upstream_task_id !== other.task_id) {
+          expandDataLocal.push({
+            key: t('Upstream Task ID'),
+            value: other.upstream_task_id,
+          });
+        }
+        if (other?.task_status) {
+          expandDataLocal.push({
+            key: t('Status'),
+            value: other.task_status,
+          });
+        }
+        if (other?.task_progress) {
+          expandDataLocal.push({
+            key: t('Progress'),
+            value: other.task_progress,
           });
         }
         if (other?.reason) {
           expandDataLocal.push({
-            key: t('失败原因'),
+            key: logs[i].type === 6 ? t('任务失败原因') : t('Reason'),
+            value: (
+              <div style={{ maxWidth: 600, whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.6 }}>
+                {other.reason}
+              </div>
+            ),
+          });
+        }
+      }
+      if (logs[i].type === 6) {
+        if (other?.reason) {
+          expandDataLocal.push({
+            key: t('退款原因'),
             value: (
               <div style={{ maxWidth: 600, whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.6 }}>
                 {other.reason}

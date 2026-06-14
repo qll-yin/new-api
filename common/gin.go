@@ -105,6 +105,26 @@ func CleanupBodyStorage(c *gin.Context) {
 	}
 }
 
+// ReplaceRequestBodyReusable replaces the current request body and refreshes the
+// reusable body cache so later UnmarshalBodyReusable/GetRequestBody calls see the
+// rewritten payload instead of any previously cached original body.
+func ReplaceRequestBodyReusable(c *gin.Context, body []byte) {
+	if c == nil || c.Request == nil {
+		return
+	}
+
+	if storage, exists := c.Get(KeyBodyStorage); exists && storage != nil {
+		if bs, ok := storage.(BodyStorage); ok {
+			_ = bs.Close()
+		}
+		c.Set(KeyBodyStorage, nil)
+	}
+
+	c.Request.Body = io.NopCloser(bytes.NewReader(body))
+	c.Request.ContentLength = int64(len(body))
+	c.Set(KeyRequestBody, body)
+}
+
 func UnmarshalBodyReusable(c *gin.Context, v any) error {
 	storage, err := GetBodyStorage(c)
 	if err != nil {

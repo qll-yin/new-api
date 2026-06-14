@@ -40,15 +40,13 @@ const ModelPricingTable = ({
     ? modelData.enable_groups
     : [];
   const autoChain = autoGroups.filter((g) => modelEnableGroups.includes(g));
-  const renderGroupPriceTable = () => {
-    // 仅展示模型可用的分组：模型 enable_groups 与用户可用分组的交集
 
+  const renderGroupPriceTable = () => {
     const availableGroups = Object.keys(usableGroup || {})
       .filter((g) => g !== '')
       .filter((g) => g !== 'auto')
       .filter((g) => modelEnableGroups.includes(g));
 
-    // 准备表格数据
     const tableData = availableGroups.map((group) => {
       const priceData = modelData
         ? calculateModelPrice({
@@ -62,27 +60,27 @@ const ModelPricingTable = ({
           })
         : { inputPrice: '-', outputPrice: '-', price: '-' };
 
-      // 获取分组倍率
       const groupRatioValue =
         groupRatio && groupRatio[group] ? groupRatio[group] : 1;
 
       return {
         key: group,
-        group: group,
+        group,
         ratio: groupRatioValue,
         billingType:
           modelData?.billing_mode === 'tiered_expr'
             ? t('动态计费')
-            : modelData?.quota_type === 0
-              ? t('按量计费')
-              : modelData?.quota_type === 1
-                ? t('按次计费')
-                : '-',
+            : modelData?.billing_mode === 'video'
+              ? t('视频计费')
+              : modelData?.quota_type === 0
+                ? t('按量计费')
+                : modelData?.quota_type === 1
+                  ? t('按次计费')
+                  : '-',
         priceItems: getModelPriceItems(priceData, t, siteDisplayType),
       };
     });
 
-    // 定义表格列
     const columns = [
       {
         title: t('分组'),
@@ -90,7 +88,6 @@ const ModelPricingTable = ({
         render: (text) => (
           <Tag color='white' size='small' shape='circle'>
             {text}
-            {t('分组')}
           </Tag>
         ),
       },
@@ -98,7 +95,6 @@ const ModelPricingTable = ({
 
     const isDynamic = modelData?.billing_mode === 'tiered_expr';
 
-    // 动态计费时始终显示倍率列，否则根据设置
     if (showRatio || isDynamic) {
       columns.push({
         title: t('分组倍率'),
@@ -118,6 +114,7 @@ const ModelPricingTable = ({
         let color = 'white';
         if (text === t('按量计费')) color = 'violet';
         else if (text === t('按次计费')) color = 'teal';
+        else if (text === t('视频计费')) color = 'indigo';
         else if (text === t('动态计费')) color = 'amber';
         return (
           <Tag color={color} size='small' shape='circle'>
@@ -186,7 +183,6 @@ const ModelPricingTable = ({
             <React.Fragment key={g}>
               <Tag color='white' size='small' shape='circle'>
                 {g}
-                {t('分组')}
               </Tag>
               {idx < autoChain.length - 1 && <span className='text-sm'>→</span>}
             </React.Fragment>

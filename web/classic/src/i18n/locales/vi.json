@@ -2777,7 +2777,7 @@
     "私有部署地址": "Địa chỉ triển khai riêng",
     "私有镜像仓库的密码": "Password for private image registry",
     "私有镜像仓库的用户名": "Username for private image registry",
-    "秒": "Giây",
+    "秒": "giây",
     "积分": "Điểm",
     "积分兑换": "Đổi điểm",
     "积分记录": "Hồ sơ điểm",
@@ -4209,6 +4209,14 @@
     "并确认自行承担部署": "confirm that I bear legal responsibility arising from deployment",
     "运营和收费行为产生的法律责任": "operation and charging behavior",
     "，": ", ",
-    "、": ", "
+    "、": ", ",
+    "视频计费": "Tính phí video",
+    "视频基础单价": "Đơn giá video cơ bản",
+    "视频价格": "Giá video",
+    "基准分辨率": "Độ phân giải chuẩn",
+    "普通文本模型用按量或按次即可；视频模型请切到视频计费；如果价格需要跟请求参数或请求头联动，请切到表达式 / 阶梯计费。": "Với mô hình văn bản thông thường, chỉ cần dùng tính phí theo lượng hoặc theo lượt; với mô hình video, hãy chuyển sang tính phí video; nếu giá cần liên động với tham số hoặc header của request, hãy chuyển sang biểu thức / tính phí bậc thang.",
+    "当前基准分辨率，使用基础视频单价。": "Độ phân giải chuẩn hiện tại sẽ dùng đơn giá video cơ bản.",
+    "可为该分辨率单独设置每秒单价。": "Có thể đặt đơn giá theo giây riêng cho độ phân giải này.",
+    "基准分辨率下每秒生成视频的美元价格。": "Giá USD mỗi giây để tạo video ở độ phân giải chuẩn."
   }
 }

@@ -25,12 +25,21 @@ import {
 
 export const PAGE_SIZE = 10;
 export const PRICE_SUFFIX = '$/1M tokens';
+export const VIDEO_PRICE_SUFFIX = '$/second';
+export const VIDEO_RESOLUTIONS = ['480P', '720P', '1080P'];
 const EMPTY_CANDIDATE_MODEL_NAMES = [];
 
 const EMPTY_MODEL = {
   name: '',
   billingMode: 'per-token',
   fixedPrice: '',
+  videoBaseResolution: '720P',
+  videoBasePrice: '',
+  videoResolutionPrices: {
+    '480P': '',
+    '720P': '',
+    '1080P': '',
+  },
   inputPrice: '',
   completionPrice: '',
   lockedCompletionRatio: '',
@@ -101,6 +110,47 @@ const parseOptionJSON = (rawValue) => {
   }
 };
 
+const normalizeVideoResolution = (value) => {
+  if (!value) return '';
+  const normalized = String(value).trim().toUpperCase();
+  if (normalized === '480' || normalized === '720' || normalized === '1080') {
+    return `${normalized}P`;
+  }
+  return normalized;
+};
+
+const createVideoResolutionPrices = (baseResolution, basePrice, multipliers = {}) => {
+  const normalizedBaseResolution =
+    normalizeVideoResolution(baseResolution) || '720P';
+  const normalizedBasePrice = toNumericString(basePrice);
+  const basePriceNumber = toNumberOrNull(normalizedBasePrice);
+  const prices = {
+    '480P': '',
+    '720P': '',
+    '1080P': '',
+  };
+
+  if (normalizedBasePrice) {
+    prices[normalizedBaseResolution] = normalizedBasePrice;
+  }
+
+  if (basePriceNumber !== null && multipliers && typeof multipliers === 'object') {
+    Object.entries(multipliers).forEach(([resolution, multiplier]) => {
+      const normalizedResolution = normalizeVideoResolution(resolution);
+      const multiplierNumber = toNumberOrNull(multiplier);
+      if (
+        !VIDEO_RESOLUTIONS.includes(normalizedResolution) ||
+        multiplierNumber === null
+      ) {
+        return;
+      }
+      prices[normalizedResolution] = formatNumber(basePriceNumber * multiplierNumber);
+    });
+  }
+
+  return prices;
+};
+
 const ratioToBasePrice = (ratio) => {
   const num = toNumberOrNull(ratio);
   if (num === null) return '';
@@ -133,6 +183,34 @@ const buildModelState = (name, sourceMaps) => {
       billingMode: 'tiered_expr',
       billingExpr,
       requestRuleExpr,
+      rawRatios: { ...EMPTY_MODEL.rawRatios },
+      hasConflict: false,
+    };
+  }
+
+  const videoConfig = sourceMaps.VideoModelConfig?.[name];
+  if (
+    billingMode === 'video' &&
+    videoConfig &&
+    typeof videoConfig === 'object' &&
+    !Array.isArray(videoConfig)
+  ) {
+    const baseResolution =
+      normalizeVideoResolution(videoConfig.base_resolution || videoConfig.baseResolution) ||
+      '720P';
+    const basePrice = toNumericString(sourceMaps.ModelPrice[name]);
+    return {
+      ...EMPTY_MODEL,
+      name,
+      billingMode: 'video',
+      fixedPrice: basePrice,
+      videoBaseResolution: baseResolution,
+      videoBasePrice: basePrice,
+      videoResolutionPrices: createVideoResolutionPrices(
+        baseResolution,
+        basePrice,
+        videoConfig.resolution_multipliers || videoConfig.resolutionMultipliers,
+      ),
       rawRatios: { ...EMPTY_MODEL.rawRatios },
       hasConflict: false,
     };
@@ -225,6 +303,7 @@ const buildModelState = (name, sourceMaps) => {
 
 export const isBasePricingUnset = (model) =>
   model.billingMode !== 'tiered_expr' &&
+  model.billingMode !== 'video' &&
   !hasValue(model.fixedPrice) && !hasValue(model.inputPrice);
 
 export const getModelWarnings = (model, t) => {
@@ -303,6 +382,17 @@ export const buildSummaryText = (model, t) => {
     return `${t('阶梯计费')} (${tierCount} ${t('档')})${requestRuleSuffix}`;
   }
 
+  if (model.billingMode === 'video') {
+    const extraCount = VIDEO_RESOLUTIONS.filter(
+      (resolution) =>
+        resolution !== model.videoBaseResolution &&
+        hasValue(model.videoResolutionPrices?.[resolution]),
+    ).length;
+    return extraCount > 0
+      ? `${t('视频')} ${model.videoBaseResolution} + ${extraCount} ${t('个分辨率覆盖')}`
+      : `${t('视频')} ${model.videoBaseResolution}`;
+  }
+
   if (model.billingMode === 'per-request' && hasValue(model.fixedPrice)) {
     return `${t('按次')} $${model.fixedPrice} / ${t('次')}${requestRuleSuffix}`;
   }
@@ -350,6 +440,37 @@ const serializeModel = (model, t) => {
     if (hasValue(model.fixedPrice)) {
       result.ModelPrice = toNormalizedNumber(model.fixedPrice);
     }
+    return result;
+  }
+
+  if (model.billingMode === 'video') {
+    const basePrice = toNumberOrNull(model.videoBasePrice || model.fixedPrice);
+    if (basePrice === null) {
+      throw new Error(
+        t('模型 {{name}} 缺少视频基础单价，无法保存视频计费配置', {
+          name: model.name,
+        }),
+      );
+    }
+
+    result.ModelPrice = toNormalizedNumber(basePrice);
+    result.VideoModelConfig = {
+      base_resolution: model.videoBaseResolution || '720P',
+      resolution_multipliers: {},
+    };
+
+    VIDEO_RESOLUTIONS.forEach((resolution) => {
+      if (resolution === result.VideoModelConfig.base_resolution) {
+        return;
+      }
+      const resolutionPrice = toNumberOrNull(model.videoResolutionPrices?.[resolution]);
+      if (resolutionPrice === null) {
+        return;
+      }
+      result.VideoModelConfig.resolution_multipliers[resolution] =
+        toNormalizedNumber(resolutionPrice / basePrice);
+    });
+
     return result;
   }
 
@@ -484,6 +605,31 @@ export const buildPreviewRows = (model, t) => {
               : finalBillingExpr,
       });
     }
+    return rows;
+  }
+
+  if (model.billingMode === 'video') {
+    const rows = [
+      {
+        key: 'ModelPrice',
+        label: 'ModelPrice',
+        value: hasValue(model.videoBasePrice) ? model.videoBasePrice : t('空'),
+      },
+      {
+        key: 'VideoModelConfig.base_resolution',
+        label: 'VideoModelConfig.base_resolution',
+        value: model.videoBaseResolution || '720P',
+      },
+    ];
+    VIDEO_RESOLUTIONS.forEach((resolution) => {
+      rows.push({
+        key: `VideoModelConfig.${resolution}`,
+        label: `VideoModelConfig.${resolution}`,
+        value: hasValue(model.videoResolutionPrices?.[resolution])
+          ? model.videoResolutionPrices[resolution]
+          : t('空'),
+      });
+    });
     return rows;
   }
 
@@ -638,6 +784,7 @@ export function useModelPricingEditorState({
   useEffect(() => {
     const sourceMaps = {
       ModelPrice: parseOptionJSON(options.ModelPrice),
+      VideoModelConfig: parseOptionJSON(options.VideoModelConfig),
       ModelRatio: parseOptionJSON(options.ModelRatio),
       CompletionRatio: parseOptionJSON(options.CompletionRatio),
       CompletionRatioMeta: parseOptionJSON(options.CompletionRatioMeta),
@@ -653,6 +800,7 @@ export function useModelPricingEditorState({
     const names = new Set([
       ...candidateModelNames,
       ...Object.keys(sourceMaps.ModelPrice),
+      ...Object.keys(sourceMaps.VideoModelConfig),
       ...Object.keys(sourceMaps.ModelRatio),
       ...Object.keys(sourceMaps.CompletionRatio),
       ...Object.keys(sourceMaps.CompletionRatioMeta),
@@ -879,6 +1027,77 @@ export function useModelPricingEditorState({
       if (value === 'tiered_expr' && !model.billingExpr) {
         next.billingExpr = 'tier("base", p * 0 + c * 0)';
       }
+      if (value === 'video') {
+        next.videoBaseResolution =
+          normalizeVideoResolution(model.videoBaseResolution) || '720P';
+        next.videoBasePrice = model.videoBasePrice || model.fixedPrice || '';
+        next.fixedPrice = next.videoBasePrice;
+        next.videoResolutionPrices = createVideoResolutionPrices(
+          next.videoBaseResolution,
+          next.videoBasePrice,
+        );
+      }
+      return next;
+    });
+  };
+
+  const handleVideoBaseResolutionChange = (value) => {
+    if (!selectedModel) return;
+    const normalized = normalizeVideoResolution(value);
+    if (!VIDEO_RESOLUTIONS.includes(normalized)) return;
+
+    upsertModel(selectedModel.name, (model) => {
+      const nextPrices = {
+        ...(model.videoResolutionPrices || EMPTY_MODEL.videoResolutionPrices),
+      };
+      const nextBasePrice = nextPrices[normalized] || model.videoBasePrice || '';
+      nextPrices[normalized] = nextBasePrice;
+      return {
+        ...model,
+        videoBaseResolution: normalized,
+        videoBasePrice: nextBasePrice,
+        fixedPrice: nextBasePrice,
+        videoResolutionPrices: nextPrices,
+      };
+    });
+  };
+
+  const handleVideoBasePriceChange = (value) => {
+    if (!selectedModel || !NUMERIC_INPUT_REGEX.test(value)) {
+      return;
+    }
+
+    upsertModel(selectedModel.name, (model) => ({
+      ...model,
+      videoBasePrice: value,
+      fixedPrice: value,
+      videoResolutionPrices: {
+        ...(model.videoResolutionPrices || EMPTY_MODEL.videoResolutionPrices),
+        [model.videoBaseResolution || '720P']: value,
+      },
+    }));
+  };
+
+  const handleVideoResolutionPriceChange = (resolution, value) => {
+    if (!selectedModel || !NUMERIC_INPUT_REGEX.test(value)) {
+      return;
+    }
+    const normalized = normalizeVideoResolution(resolution);
+    if (!VIDEO_RESOLUTIONS.includes(normalized)) return;
+
+    upsertModel(selectedModel.name, (model) => {
+      const nextPrices = {
+        ...(model.videoResolutionPrices || EMPTY_MODEL.videoResolutionPrices),
+        [normalized]: value,
+      };
+      const next = {
+        ...model,
+        videoResolutionPrices: nextPrices,
+      };
+      if (normalized === model.videoBaseResolution) {
+        next.videoBasePrice = value;
+        next.fixedPrice = value;
+      }
       return next;
     });
   };
@@ -964,6 +1183,12 @@ export function useModelPricingEditorState({
           ...model,
           billingMode: selectedModel.billingMode,
           fixedPrice: selectedModel.fixedPrice,
+          videoBaseResolution: selectedModel.videoBaseResolution,
+          videoBasePrice: selectedModel.videoBasePrice,
+          videoResolutionPrices: {
+            ...(selectedModel.videoResolutionPrices ||
+              EMPTY_MODEL.videoResolutionPrices),
+          },
           inputPrice: selectedModel.inputPrice,
           completionPrice: selectedModel.completionPrice,
           cachePrice: selectedModel.cachePrice,
@@ -1025,6 +1250,7 @@ export function useModelPricingEditorState({
     try {
       const output = {
         ModelPrice: {},
+        VideoModelConfig: {},
         ModelRatio: {},
         CompletionRatio: {},
         CacheRatio: {},
@@ -1034,7 +1260,7 @@ export function useModelPricingEditorState({
         AudioCompletionRatio: {},
       };
 
-      const tieredOutput = {
+      const billingModeOutput = {
         'billing_setting.billing_mode': {},
         'billing_setting.billing_expr': {},
       };
@@ -1046,9 +1272,13 @@ export function useModelPricingEditorState({
             model.requestRuleExpr,
           );
           if (finalBillingExpr) {
-            tieredOutput['billing_setting.billing_mode'][model.name] = 'tiered_expr';
-            tieredOutput['billing_setting.billing_expr'][model.name] = finalBillingExpr;
+            billingModeOutput['billing_setting.billing_mode'][model.name] =
+              'tiered_expr';
+            billingModeOutput['billing_setting.billing_expr'][model.name] =
+              finalBillingExpr;
           }
+        } else if (model.billingMode === 'video') {
+          billingModeOutput['billing_setting.billing_mode'][model.name] = 'video';
         }
 
         // Always serialize ratio/price values for all models (including
@@ -1076,7 +1306,7 @@ export function useModelPricingEditorState({
             value: JSON.stringify(value, null, 2),
           }),
         ),
-        ...Object.entries(tieredOutput).map(([key, value]) =>
+        ...Object.entries(billingModeOutput).map(([key, value]) =>
           API.put('/api/option/', {
             key,
             value: JSON.stringify(value, null, 2),
@@ -1125,6 +1355,9 @@ export function useModelPricingEditorState({
     handleBillingModeChange,
     handleBillingExprChange,
     handleRequestRuleExprChange,
+    handleVideoBaseResolutionChange,
+    handleVideoBasePriceChange,
+    handleVideoResolutionPriceChange,
     handleSubmit,
     addModel,
     deleteModel,

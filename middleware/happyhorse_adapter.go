@@ -1,8 +1,6 @@
 package middleware
 
 import (
-	"bytes"
-	"io"
 	"net/http"
 
 	"github.com/QuantumNous/new-api/common"
@@ -63,9 +61,8 @@ func HappyHorseRequestConvert() func(c *gin.Context) {
 		}
 
 		// 重写请求体与路径，复用统一任务管线（计费/渠道选择/轮询均自动生效）
-		c.Request.Body = io.NopCloser(bytes.NewBuffer(jsonData))
+		common.ReplaceRequestBodyReusable(c, jsonData)
 		c.Request.URL.Path = "/v1/video/generations"
-		c.Set(common.KeyRequestBody, jsonData)
 		// 标记为 DashScope 原生调用：响应需返回 dashscope 原生格式
 		c.Set("dashscope_native", true)
 

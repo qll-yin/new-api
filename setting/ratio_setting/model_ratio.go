@@ -314,6 +314,37 @@ var defaultModelPrice = map[string]float64{
 	"veo-3.0-fast-generate-001":      0.15,
 	"veo-3.1-generate-preview":       0.4,
 	"veo-3.1-fast-generate-preview":  0.15,
+	"happyhorse-1.0-t2v":             0.14,
+	"happyhorse-1.0-i2v":             0.14,
+	"happyhorse-1.0-r2v":             0.14,
+	"happyhorse-1.0-video-edit":      0.14,
+}
+
+var defaultVideoModelConfig = map[string]VideoModelConfig{
+	"happyhorse-1.0-t2v": {
+		BaseResolution: "720P",
+		ResolutionMultipliers: map[string]float64{
+			"1080P": 0.24 / 0.14,
+		},
+	},
+	"happyhorse-1.0-i2v": {
+		BaseResolution: "720P",
+		ResolutionMultipliers: map[string]float64{
+			"1080P": 0.24 / 0.14,
+		},
+	},
+	"happyhorse-1.0-r2v": {
+		BaseResolution: "720P",
+		ResolutionMultipliers: map[string]float64{
+			"1080P": 0.24 / 0.14,
+		},
+	},
+	"happyhorse-1.0-video-edit": {
+		BaseResolution: "720P",
+		ResolutionMultipliers: map[string]float64{
+			"1080P": 0.24 / 0.14,
+		},
+	},
 }
 
 var defaultAudioRatio = map[string]float64{
@@ -348,6 +379,7 @@ var defaultCompletionRatio = map[string]float64{
 // InitRatioSettings initializes all model related settings maps
 func InitRatioSettings() {
 	modelPriceMap.AddAll(defaultModelPrice)
+	videoModelConfigMap.AddAll(defaultVideoModelConfig)
 	modelRatioMap.AddAll(defaultModelRatio)
 	completionRatioMap.AddAll(defaultCompletionRatio)
 	cacheRatioMap.AddAll(defaultCacheRatio)

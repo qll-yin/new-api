@@ -747,6 +747,23 @@ export const calculateModelPrice = ({
     };
   }
 
+  if (record.billing_mode === 'video') {
+    const priceUSD = parseFloat(record.model_price) * usedGroupRatio;
+    const displayVal = displayPrice(priceUSD);
+
+    return {
+      price: displayVal,
+      rawPrice: priceUSD,
+      billingMode: 'video',
+      quotaShowType: record.quota_show_type,
+      videoModelConfig: record.video_model_config,
+      isPerToken: false,
+      isTokensDisplay: false,
+      usedGroup,
+      usedGroupRatio,
+    };
+  }
+
   if (record.quota_type === 1) {
     // 按次计费
     const priceUSD = parseFloat(record.model_price) * usedGroupRatio;
@@ -754,6 +771,8 @@ export const calculateModelPrice = ({
 
     return {
       price: displayVal,
+      billingMode: 'per-request',
+      quotaShowType: record.quota_show_type,
       isPerToken: false,
       isTokensDisplay: false,
       usedGroup,
@@ -764,6 +783,8 @@ export const calculateModelPrice = ({
   // 未知计费类型，返回占位信息
   return {
     price: '-',
+    billingMode: record.billing_mode || '',
+    quotaShowType: record.quota_show_type,
     isPerToken: false,
     isTokensDisplay: false,
     usedGroup,
@@ -883,7 +904,54 @@ export const getModelPriceItems = (
         value: priceData.audioOutputPrice,
         suffix: unitSuffix,
       },
-    ].filter((item) => item.value !== null && item.value !== undefined && item.value !== '');
+    ].filter(
+      (item) =>
+        item.value !== null && item.value !== undefined && item.value !== '',
+    );
+  }
+
+  if (priceData.billingMode === 'video') {
+    const videoItems = [];
+    if (priceData.videoModelConfig?.base_resolution) {
+      const baseResolution = priceData.videoModelConfig.base_resolution;
+      videoItems.push({
+        key: 'video-base',
+        label: baseResolution,
+        value: priceData.price,
+        suffix: ` / ${t('秒')}`,
+      });
+      const multipliers = priceData.videoModelConfig.resolution_multipliers || {};
+      Object.entries(multipliers).forEach(([resolution, multiplier]) => {
+        const rawPrice =
+          priceData.rawPrice !== null && priceData.rawPrice !== undefined
+            ? priceData.rawPrice * Number(multiplier)
+            : null;
+        if (rawPrice !== null && Number.isFinite(rawPrice)) {
+          videoItems.push({
+            key: `video-${resolution}`,
+            label: resolution,
+            value: priceData.price.replace(
+              /[0-9]+(?:\.[0-9]+)?/,
+              rawPrice.toFixed(3),
+            ),
+            suffix: ` / ${t('秒')}`,
+          });
+        }
+      });
+      return videoItems;
+    }
+
+    return [
+      {
+        key: 'video',
+        label: t('视频基础单价'),
+        value: priceData.price,
+        suffix: ` / ${t('秒')}`,
+      },
+    ].filter(
+      (item) =>
+        item.value !== null && item.value !== undefined && item.value !== '',
+    );
   }
 
   return [
@@ -891,12 +959,16 @@ export const getModelPriceItems = (
       key: 'fixed',
       label: t('模型价格'),
       value: priceData.price,
-      suffix: ` / ${t('次')}`,
+      suffix:
+        priceData.quotaShowType === 'second'
+          ? ` / ${t('秒')}`
+          : ` / ${t('次')}`,
     },
-  ].filter((item) => item.value !== null && item.value !== undefined && item.value !== '');
+  ].filter(
+    (item) => item.value !== null && item.value !== undefined && item.value !== '',
+  );
 };
 
-// 格式化动态计费摘要（用于卡片视图，与 formatPriceInfo 风格统一）
 export const formatDynamicPriceSummary = (billingExpr, t, groupRatio = 1) => {
   if (!billingExpr) return <span style={{ color: 'var(--semi-color-text-1)' }}>{t('动态计费')}</span>;
 

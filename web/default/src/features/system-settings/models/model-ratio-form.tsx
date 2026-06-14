@@ -44,6 +44,7 @@ import {
 
 type ModelFormValues = {
   ModelPrice: string
+  VideoModelConfig: string
   ModelRatio: string
   CacheRatio: string
   CreateCacheRatio: string
@@ -67,6 +68,7 @@ type ModelRatioFormProps = {
 
 type ModelJsonFieldName =
   | 'ModelPrice'
+  | 'VideoModelConfig'
   | 'ModelRatio'
   | 'CacheRatio'
   | 'CreateCacheRatio'
@@ -85,6 +87,12 @@ const modelJsonFields: Array<{
     labelKey: 'Model fixed pricing',
     descriptionKey:
       'JSON map of model → USD cost per request. Takes precedence over ratio based billing.',
+  },
+  {
+    name: 'VideoModelConfig',
+    labelKey: 'Video pricing config',
+    descriptionKey:
+      'JSON map of model 鈫?video billing config, including base resolution and per-resolution multipliers.',
   },
   {
     name: 'ModelRatio',
@@ -235,6 +243,7 @@ export const ModelRatioForm = memo(function ModelRatioForm({
             <ModelRatioVisualEditor
               ref={visualEditorRef}
               savedModelPrice={savedValues.ModelPrice}
+              savedVideoModelConfig={savedValues.VideoModelConfig}
               savedModelRatio={savedValues.ModelRatio}
               savedCacheRatio={savedValues.CacheRatio}
               savedCreateCacheRatio={savedValues.CreateCacheRatio}
@@ -245,6 +254,7 @@ export const ModelRatioForm = memo(function ModelRatioForm({
               savedBillingMode={savedValues.BillingMode}
               savedBillingExpr={savedValues.BillingExpr}
               modelPrice={form.watch('ModelPrice')}
+              videoModelConfig={form.watch('VideoModelConfig')}
               modelRatio={form.watch('ModelRatio')}
               cacheRatio={form.watch('CacheRatio')}
               createCacheRatio={form.watch('CreateCacheRatio')}

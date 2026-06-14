@@ -19,9 +19,11 @@ For commercial licensing, please contact support@quantumnous.com
 import { splitBillingExprAndRequestRules } from '@/features/pricing/lib/billing-expr'
 import { safeJsonParse } from '../utils/json-parser'
 import { formatPricingNumber } from './pricing-format'
+import { normalizeVideoResolution } from './model-pricing-core'
 
 export type ModelPricingSnapshotInput = {
   modelPrice: string
+  videoModelConfig: string
   modelRatio: string
   cacheRatio: string
   createCacheRatio: string
@@ -46,6 +48,10 @@ export type ModelPricingSnapshot = {
   billingMode?: string
   billingExpr?: string
   requestRuleExpr?: string
+  videoConfig?: {
+    baseResolution?: string
+    resolutionMultipliers?: Record<string, string>
+  }
   hasConflict: boolean
 }
 
@@ -76,6 +82,7 @@ const ratioToPrice = (ratio?: string, denominator?: string) => {
 export const getModeLabel = (mode?: string) => {
   if (mode === 'per-request') return 'Per-request'
   if (mode === 'tiered_expr') return 'Expression'
+  if (mode === 'video') return 'Video'
   return 'Per-token'
 }
 
@@ -84,6 +91,7 @@ export const getModeVariant = (
 ): 'warning' | 'info' | 'success' => {
   if (mode === 'per-request') return 'warning'
   if (mode === 'tiered_expr') return 'info'
+  if (mode === 'video') return 'info'
   return 'success'
 }
 
@@ -107,6 +115,12 @@ export const getPriceSummary = (
   }
   if (row.billingMode === 'per-request') {
     return row.price ? `$${row.price} / ${t('request')}` : t('Unset price')
+  }
+  if (row.billingMode === 'video') {
+    const baseResolution = row.videoConfig?.baseResolution || '720P'
+    return row.price
+      ? `${t('Video')} $${row.price} / ${t('second')} 路 ${baseResolution}`
+      : t('Unset price')
   }
 
   const inputPrice = ratioToPrice(row.ratio)
@@ -138,6 +152,19 @@ export const getPriceDetail = (
   if (row.billingMode === 'per-request') {
     return t('Fixed request price')
   }
+  if (row.billingMode === 'video') {
+    const baseResolution = row.videoConfig?.baseResolution || '720P'
+    const multipliers = row.videoConfig?.resolutionMultipliers || {}
+    const extraCount = Object.keys(multipliers).length
+    return extraCount > 0
+      ? t('Base {{resolution}} with {{count}} resolution overrides', {
+          resolution: baseResolution,
+          count: extraCount,
+        })
+      : t('Base {{resolution}} video pricing only', {
+          resolution: baseResolution,
+        })
+  }
 
   const inputPrice = ratioToPrice(row.ratio)
   if (!inputPrice) return t('No base input price')
@@ -158,6 +185,7 @@ export const getPriceDetail = (
 
 export const buildModelSnapshots = ({
   modelPrice,
+  videoModelConfig,
   modelRatio,
   cacheRatio,
   createCacheRatio,
@@ -200,6 +228,18 @@ export const buildModelSnapshots = ({
     audioCompletionRatio,
     { fallback: {}, context: 'audio completion ratios' }
   )
+  const videoConfigMap = safeJsonParse<
+    Record<
+      string,
+      {
+        baseResolution?: string
+        resolutionMultipliers?: Record<string, number>
+      }
+    >
+  >(videoModelConfig, {
+    fallback: {},
+    context: 'video model config',
+  })
   const billingModeMap = safeJsonParse<Record<string, string>>(billingMode, {
     fallback: {},
     context: 'billing mode',
@@ -218,6 +258,7 @@ export const buildModelSnapshots = ({
     ...Object.keys(imageMap),
     ...Object.keys(audioMap),
     ...Object.keys(audioCompletionMap),
+    ...Object.keys(videoConfigMap),
     ...Object.keys(billingModeMap),
     ...Object.keys(billingExprMap),
   ])
@@ -231,6 +272,21 @@ export const buildModelSnapshots = ({
     const image = imageMap[name]?.toString() || ''
     const audio = audioMap[name]?.toString() || ''
     const audioCompletion = audioCompletionMap[name]?.toString() || ''
+    const videoConfig = videoConfigMap[name]
+      ? {
+          baseResolution: normalizeVideoResolution(
+            videoConfigMap[name].baseResolution || '720P'
+          ),
+          resolutionMultipliers: Object.fromEntries(
+            Object.entries(videoConfigMap[name].resolutionMultipliers || {}).map(
+              ([resolution, multiplier]) => [
+                normalizeVideoResolution(resolution),
+                multiplier.toString(),
+              ]
+            )
+          ),
+        }
+      : undefined
 
     const modeForModel = billingModeMap[name]
     if (modeForModel === 'tiered_expr') {
@@ -250,6 +306,23 @@ export const buildModelSnapshots = ({
         imageRatio: image,
         audioRatio: audio,
         audioCompletionRatio: audioCompletion,
+        hasConflict: false,
+      }
+    }
+
+    if (videoConfig) {
+      return {
+        name,
+        price,
+        ratio,
+        cacheRatio: cache,
+        createCacheRatio: createCache,
+        completionRatio: completion,
+        imageRatio: image,
+        audioRatio: audio,
+        audioCompletionRatio: audioCompletion,
+        billingMode: 'video',
+        videoConfig,
         hasConflict: false,
       }
     }
@@ -292,5 +365,6 @@ export const getSnapshotSignature = (snapshot?: ModelPricingSnapshot) => {
     billingMode: snapshot.billingMode || 'per-token',
     billingExpr: snapshot.billingExpr || '',
     requestRuleExpr: snapshot.requestRuleExpr || '',
+    videoConfig: snapshot.videoConfig,
   })
 }

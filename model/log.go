@@ -386,6 +386,30 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 	}
 }
 
+func GetLatestLogByRequestID(requestId string, logTypes []int) (*Log, bool, error) {
+	if requestId == "" {
+		return nil, false, nil
+	}
+	query := LOG_DB.Where("request_id = ?", requestId)
+	if len(logTypes) > 0 {
+		query = query.Where("type IN ?", logTypes)
+	}
+	var log Log
+	err := query.Order("id desc").First(&log).Error
+	exist, err := RecordExist(err)
+	if err != nil {
+		return nil, false, err
+	}
+	return &log, exist, nil
+}
+
+func UpdateLog(log *Log) error {
+	if log == nil {
+		return nil
+	}
+	return LOG_DB.Save(log).Error
+}
+
 func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {
 	var tx *gorm.DB
 	if logType == LogTypeUnknown {

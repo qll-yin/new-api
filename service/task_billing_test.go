@@ -11,6 +11,9 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/QuantumNous/new-api/types"
+	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -287,6 +290,58 @@ func TestRefundTaskQuota_NoToken(t *testing.T) {
 	log := getLastLog(t)
 	require.NotNil(t, log)
 	assert.Equal(t, model.LogTypeRefund, log.Type)
+}
+
+func TestLogTaskConsumption_ZeroQuota_NoLog(t *testing.T) {
+	truncate(t)
+
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(nil)
+	req, err := http.NewRequest(http.MethodPost, "/v1/videos", nil)
+	require.NoError(t, err)
+	c.Request = req
+	c.Set("token_name", "test_token")
+
+	info := &relaycommon.RelayInfo{
+		UserId:          1,
+		TokenId:         1,
+		UsingGroup:      "default",
+		OriginModelName: "test-model",
+		PriceData: types.PriceData{
+			Quota: 0,
+		},
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelId: 1,
+		},
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{
+			Action: "video",
+		},
+	}
+
+	LogTaskConsumption(c, info)
+
+	assert.Equal(t, int64(0), countLogs(t))
+}
+
+func TestTaskBillingOther_FillsFallbackRatios(t *testing.T) {
+	truncate(t)
+
+	task := makeTask(1, 1, 1000, 0, BillingSourceWallet, 0)
+	task.Group = "missing-group"
+	task.Properties.OriginModelName = "missing-model"
+	task.PrivateData.BillingContext = &model.TaskBillingContext{
+		ModelPrice:      0.02,
+		OriginModelName: "missing-model",
+	}
+
+	other := taskBillingOther(task)
+
+	modelRatio, _, _ := ratio_setting.GetModelRatio("missing-model")
+	completionRatio := ratio_setting.GetCompletionRatio("missing-model")
+
+	assert.Equal(t, modelRatio, other["model_ratio"])
+	assert.Equal(t, float64(1), other["group_ratio"])
+	assert.Equal(t, completionRatio, other["completion_ratio"])
 }
 
 // ===========================================================================

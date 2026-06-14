@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
@@ -16,43 +17,38 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 	"github.com/pkg/errors"
 	"github.com/tidwall/sjson"
 )
 
-// ============================
-// Request / Response structures (DashScope 格式)
-// ============================
-
-// HappyHorseRequest 阿里云百炼 HappyHorse 视频生成请求
 type HappyHorseRequest struct {
 	Model      string                `json:"model"`
 	Input      HappyHorseInput       `json:"input"`
 	Parameters *HappyHorseParameters `json:"parameters,omitempty"`
 }
 
-// HappyHorseMedia 媒体素材项（reference_image / first_frame / video）
 type HappyHorseMedia struct {
 	Type string `json:"type"`
 	URL  string `json:"url"`
 }
 
-// HappyHorseInput 输入信息
 type HappyHorseInput struct {
 	Prompt string            `json:"prompt,omitempty"`
 	Media  []HappyHorseMedia `json:"media,omitempty"`
 }
 
-// HappyHorseParameters 视频参数
 type HappyHorseParameters struct {
-	Resolution string `json:"resolution,omitempty"` // 480P / 720P / 1080P
-	Ratio      string `json:"ratio,omitempty"`      // 宽高比，如 16:9（i2v 不支持）
-	Duration   *int   `json:"duration,omitempty"`   // 视频时长（秒）
+	Resolution   string `json:"resolution,omitempty"`
+	Ratio        string `json:"ratio,omitempty"`
+	Duration     *int   `json:"duration,omitempty"`
+	Watermark    *bool  `json:"watermark,omitempty"`
+	AudioSetting string `json:"audio_setting,omitempty"`
+	Seed         *int   `json:"seed,omitempty"`
 }
 
-// HappyHorseResponse DashScope 响应
 type HappyHorseResponse struct {
 	Output    HappyHorseOutput `json:"output"`
 	RequestID string           `json:"request_id"`
@@ -61,7 +57,6 @@ type HappyHorseResponse struct {
 	Usage     *HappyHorseUsage `json:"usage,omitempty"`
 }
 
-// HappyHorseOutput 输出信息
 type HappyHorseOutput struct {
 	TaskID        string `json:"task_id"`
 	TaskStatus    string `json:"task_status"`
@@ -74,18 +69,18 @@ type HappyHorseOutput struct {
 	Message       string `json:"message,omitempty"`
 }
 
-// HappyHorseUsage 使用统计
 type HappyHorseUsage struct {
-	InputVideoDuration  dto.IntValue `json:"input_video_duration,omitempty"`
-	OutputVideoDuration dto.IntValue `json:"output_video_duration,omitempty"`
-	Duration            dto.IntValue `json:"duration,omitempty"`
-	SR                  dto.IntValue `json:"SR,omitempty"`
-	VideoCount          dto.IntValue `json:"video_count,omitempty"`
+	InputVideoDuration  happyHorseNumber `json:"input_video_duration,omitempty"`
+	OutputVideoDuration happyHorseNumber `json:"output_video_duration,omitempty"`
+	Duration            happyHorseNumber `json:"duration,omitempty"`
+	SR                  happyHorseNumber `json:"SR,omitempty"`
+	VideoCount          happyHorseNumber `json:"video_count,omitempty"`
 }
 
-// ============================
-// Adaptor implementation
-// ============================
+type happyHorseRequestMetadata struct {
+	Media      []HappyHorseMedia     `json:"media"`
+	Parameters *HappyHorseParameters `json:"parameters"`
+}
 
 type TaskAdaptor struct {
 	taskcommon.BaseBilling
@@ -94,26 +89,72 @@ type TaskAdaptor struct {
 	baseURL     string
 }
 
+type happyHorseNumber float64
+
+func (n *happyHorseNumber) UnmarshalJSON(data []byte) error {
+	var num float64
+	if err := common.Unmarshal(data, &num); err == nil {
+		*n = happyHorseNumber(num)
+		return nil
+	}
+
+	var str string
+	if err := common.Unmarshal(data, &str); err != nil {
+		return err
+	}
+	parsed, err := strconv.ParseFloat(str, 64)
+	if err != nil {
+		return err
+	}
+	*n = happyHorseNumber(parsed)
+	return nil
+}
+
 func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 	a.ChannelType = info.ChannelType
 	a.baseURL = info.ChannelBaseUrl
 	a.apiKey = info.ApiKey
 }
 
-func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.TaskError) {
-	// ValidateMultipartDirect 负责解析并将原始 TaskSubmitReq 存入 context
-	return relaycommon.ValidateMultipartDirect(c, info)
+func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskError {
+	var req relaycommon.TaskSubmitReq
+	if err := common.UnmarshalBodyReusable(c, &req); err != nil {
+		return service.TaskErrorWrapperLocal(err, "invalid_json", http.StatusBadRequest)
+	}
+
+	if strings.TrimSpace(req.Model) == "" {
+		return service.TaskErrorWrapperLocal(fmt.Errorf("model field is required"), "missing_model", http.StatusBadRequest)
+	}
+
+	meta, err := parseHappyHorseMetadata(req)
+	if err != nil {
+		return service.TaskErrorWrapperLocal(err, "invalid_request", http.StatusBadRequest)
+	}
+	if err := validateHappyHorseTaskRequest(req.Model, req.Prompt, meta.Media); err != nil {
+		return service.TaskErrorWrapperLocal(err, "invalid_request", http.StatusBadRequest)
+	}
+
+	action := constant.TaskActionTextGenerate
+	if len(meta.Media) > 0 || req.HasImage() {
+		action = constant.TaskActionGenerate
+	}
+
+	if info.TaskRelayInfo == nil {
+		info.TaskRelayInfo = &relaycommon.TaskRelayInfo{}
+	}
+	info.Action = action
+	c.Set("task_request", req)
+	return nil
 }
 
 func (a *TaskAdaptor) BuildRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	return fmt.Sprintf("%s/api/v1/services/aigc/video-generation/video-synthesis", a.baseURL), nil
 }
 
-// BuildRequestHeader 设置 DashScope 异步任务所需请求头
 func (a *TaskAdaptor) BuildRequestHeader(c *gin.Context, req *http.Request, info *relaycommon.RelayInfo) error {
 	req.Header.Set("Authorization", "Bearer "+a.apiKey)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-DashScope-Async", "enable") // HTTP 调用只支持异步，必须设置
+	req.Header.Set("X-DashScope-Async", "enable")
 	return nil
 }
 
@@ -141,16 +182,87 @@ func isVideoEditModel(model string) bool {
 }
 
 func isImageToVideoModel(model string) bool {
-	// 图生视频（i2v）宽高比跟随首帧图像，不支持 ratio 参数
 	return strings.Contains(model, "i2v")
 }
 
-// convertToHappyHorseRequest 将统一 TaskSubmitReq 转换为 DashScope HappyHorse 请求。
-// 素材（media 数组）通过 metadata.media 按 DashScope 原格式透传，
-// 适配器仅负责组装 parameters 与默认值。
+func isReferenceToVideoModel(model string) bool {
+	return strings.Contains(model, "r2v")
+}
+
+func parseHappyHorseMetadata(req relaycommon.TaskSubmitReq) (*happyHorseRequestMetadata, error) {
+	meta := &happyHorseRequestMetadata{}
+	if req.Metadata == nil {
+		return meta, nil
+	}
+	if err := req.UnmarshalMetadata(meta); err != nil {
+		return nil, err
+	}
+	return meta, nil
+}
+
+func happyHorseResolutionRatio(resolution string) float64 {
+	multiplier, _, ok := ratio_setting.GetVideoResolutionMultiplier("happyhorse-1.0-t2v", resolution)
+	if !ok {
+		return 1
+	}
+	return multiplier
+}
+
+func happyHorseResolutionLabelFromSR(sr happyHorseNumber) string {
+	return ratio_setting.NormalizeVideoResolution(strconv.FormatFloat(float64(sr), 'f', -1, 64))
+}
+
+func promptRequiredForModel(model string) bool {
+	return !isImageToVideoModel(model)
+}
+
+func validateHappyHorseTaskRequest(model, prompt string, media []HappyHorseMedia) error {
+	if promptRequiredForModel(model) && strings.TrimSpace(prompt) == "" {
+		return fmt.Errorf("prompt is required")
+	}
+
+	switch {
+	case isImageToVideoModel(model):
+		if len(media) != 1 {
+			return fmt.Errorf("happyhorse i2v requires exactly one first_frame media")
+		}
+		if media[0].Type != "first_frame" {
+			return fmt.Errorf("happyhorse i2v media type must be first_frame")
+		}
+	case isReferenceToVideoModel(model):
+		if len(media) == 0 {
+			return fmt.Errorf("happyhorse r2v requires at least one reference_image")
+		}
+		for _, item := range media {
+			if item.Type != "reference_image" {
+				return fmt.Errorf("happyhorse r2v media type must be reference_image")
+			}
+		}
+	case isVideoEditModel(model):
+		if len(media) == 0 {
+			return fmt.Errorf("happyhorse video-edit requires input media")
+		}
+		videoCount := 0
+		for _, item := range media {
+			switch item.Type {
+			case "video":
+				videoCount++
+			case "reference_image":
+			default:
+				return fmt.Errorf("happyhorse video-edit only supports video and reference_image media")
+			}
+		}
+		if videoCount != 1 {
+			return fmt.Errorf("happyhorse video-edit requires exactly one video media")
+		}
+	}
+
+	return nil
+}
+
 func (a *TaskAdaptor) convertToHappyHorseRequest(info *relaycommon.RelayInfo, req relaycommon.TaskSubmitReq) (*HappyHorseRequest, error) {
 	upstreamModel := req.Model
-	if info.IsModelMapped {
+	if info != nil && info.ChannelMeta != nil && info.IsModelMapped {
 		upstreamModel = info.UpstreamModelName
 	}
 
@@ -159,23 +271,21 @@ func (a *TaskAdaptor) convertToHappyHorseRequest(info *relaycommon.RelayInfo, re
 		Input: HappyHorseInput{
 			Prompt: req.Prompt,
 		},
-		Parameters: &HappyHorseParameters{},
+		Parameters: &HappyHorseParameters{
+			Resolution: "1080P",
+		},
 	}
 
-	// 分辨率：优先取请求中的 size（视为分辨率档位，如 720P），否则默认 720P
 	if req.Size != "" {
 		resolution := strings.ToUpper(req.Size)
 		if !strings.HasSuffix(resolution, "P") {
-			resolution = resolution + "P"
+			resolution += "P"
 		}
 		hhReq.Parameters.Resolution = resolution
-	} else {
-		hhReq.Parameters.Resolution = "720P"
 	}
 
-	// 时长：video-edit 不接受 duration，由源视频决定
 	if !isVideoEditModel(upstreamModel) {
-		duration := 5 // 默认 5 秒
+		duration := 5
 		if req.Duration > 0 {
 			duration = req.Duration
 		} else if req.Seconds != "" {
@@ -185,43 +295,39 @@ func (a *TaskAdaptor) convertToHappyHorseRequest(info *relaycommon.RelayInfo, re
 		}
 		hhReq.Parameters.Duration = &duration
 
-		// 宽高比：i2v 跟随首帧图像不支持 ratio，其余默认 16:9
 		if !isImageToVideoModel(upstreamModel) {
 			hhReq.Parameters.Ratio = "16:9"
 		}
 	}
 
-	// 从 metadata 透传 input.media 与覆盖 parameters。
-	// metadata 结构与 DashScope 请求体对齐：{ "media": [...], "parameters": {...} }
-	if req.Metadata != nil {
-		metadataBytes, err := common.Marshal(req.Metadata)
-		if err != nil {
-			return nil, errors.Wrap(err, "marshal metadata failed")
+	meta, err := parseHappyHorseMetadata(req)
+	if err != nil {
+		return nil, errors.Wrap(err, "unmarshal metadata failed")
+	}
+	if len(meta.Media) > 0 {
+		hhReq.Input.Media = meta.Media
+	}
+	if meta.Parameters != nil {
+		if meta.Parameters.Resolution != "" {
+			hhReq.Parameters.Resolution = meta.Parameters.Resolution
 		}
-		var meta struct {
-			Media      []HappyHorseMedia     `json:"media"`
-			Parameters *HappyHorseParameters `json:"parameters"`
+		if meta.Parameters.Ratio != "" {
+			hhReq.Parameters.Ratio = meta.Parameters.Ratio
 		}
-		if err := common.Unmarshal(metadataBytes, &meta); err != nil {
-			return nil, errors.Wrap(err, "unmarshal metadata failed")
+		if meta.Parameters.Duration != nil {
+			hhReq.Parameters.Duration = meta.Parameters.Duration
 		}
-		if len(meta.Media) > 0 {
-			hhReq.Input.Media = meta.Media
+		if meta.Parameters.Watermark != nil {
+			hhReq.Parameters.Watermark = meta.Parameters.Watermark
 		}
-		if meta.Parameters != nil {
-			if meta.Parameters.Resolution != "" {
-				hhReq.Parameters.Resolution = meta.Parameters.Resolution
-			}
-			if meta.Parameters.Ratio != "" {
-				hhReq.Parameters.Ratio = meta.Parameters.Ratio
-			}
-			if meta.Parameters.Duration != nil {
-				hhReq.Parameters.Duration = meta.Parameters.Duration
-			}
+		if meta.Parameters.AudioSetting != "" {
+			hhReq.Parameters.AudioSetting = meta.Parameters.AudioSetting
+		}
+		if meta.Parameters.Seed != nil {
+			hhReq.Parameters.Seed = meta.Parameters.Seed
 		}
 	}
 
-	// video-edit 不支持 ratio / duration，确保不下发
 	if isVideoEditModel(upstreamModel) {
 		hhReq.Parameters.Ratio = ""
 		hhReq.Parameters.Duration = nil
@@ -233,8 +339,6 @@ func (a *TaskAdaptor) convertToHappyHorseRequest(info *relaycommon.RelayInfo, re
 	return hhReq, nil
 }
 
-// EstimateBilling 根据用户请求参数计算 OtherRatios（时长、分辨率）。
-// 倍率数值由后台模型定价设置配置，此处只负责生成计费键。
 func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInfo) map[string]float64 {
 	taskReq, err := relaycommon.GetTaskRequest(c)
 	if err != nil {
@@ -246,22 +350,38 @@ func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInf
 		return nil
 	}
 
-	otherRatios := make(map[string]float64)
-	if hhReq.Parameters.Duration != nil {
-		otherRatios["seconds"] = float64(*hhReq.Parameters.Duration)
+	if hhReq.Parameters.Duration == nil {
+		return nil
 	}
-	if hhReq.Parameters.Resolution != "" {
-		otherRatios[fmt.Sprintf("resolution-%s", hhReq.Parameters.Resolution)] = 1
+	modelName := taskReq.Model
+	if info != nil && info.OriginModelName != "" {
+		modelName = info.OriginModelName
 	}
-	return otherRatios
+	return taskcommon.EstimateVideoOtherRatios(modelName, *hhReq.Parameters.Duration, hhReq.Parameters.Resolution)
 }
 
-// DoRequest 委托公共助手发起请求
+func (a *TaskAdaptor) AdjustBillingOnComplete(task *model.Task, _ *relaycommon.TaskInfo) int {
+	var hhResp HappyHorseResponse
+	if err := common.Unmarshal(task.Data, &hhResp); err != nil || hhResp.Usage == nil {
+		return 0
+	}
+
+	duration := float64(hhResp.Usage.Duration)
+	if duration <= 0 {
+		duration = float64(hhResp.Usage.OutputVideoDuration)
+	}
+	if duration <= 0 {
+		return 0
+	}
+
+	resolution := happyHorseResolutionLabelFromSR(hhResp.Usage.SR)
+	return taskcommon.CalculateVideoTaskQuota(task, duration, resolution)
+}
+
 func (a *TaskAdaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (*http.Response, error) {
 	return channel.DoTaskApiRequest(a, c, info, requestBody)
 }
 
-// DoResponse 处理上游创建任务的响应
 func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (taskID string, taskData []byte, taskErr *dto.TaskError) {
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -276,10 +396,13 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 		return
 	}
 
-	// 检查错误
 	if hhResp.Code != "" {
 		taskErr = service.TaskErrorWrapper(fmt.Errorf("%s: %s", hhResp.Code, hhResp.Message), "happyhorse_api_error", resp.StatusCode)
 		return
+	}
+	if hhResp.RequestID != "" {
+		c.Set(common.UpstreamRequestIdKey, hhResp.RequestID)
+		c.Header(common.UpstreamRequestIdKey, hhResp.RequestID)
 	}
 
 	if hhResp.Output.TaskID == "" {
@@ -287,17 +410,25 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 		return
 	}
 
-	// DashScope 原生调用：返回 dashscope 原生响应，仅把 output.task_id 改写为本平台公开 task ID
 	if c.GetBool("dashscope_native") {
 		nativeResp := responseBody
 		if rewritten, e := sjson.SetBytes(nativeResp, "output.task_id", info.PublicTaskID); e == nil {
 			nativeResp = rewritten
 		}
+		if requestID := c.GetString(common.RequestIdKey); requestID != "" {
+			if rewritten, e := sjson.SetBytes(nativeResp, "request_id", requestID); e == nil {
+				nativeResp = rewritten
+			}
+		}
+		if hhResp.RequestID != "" {
+			if rewritten, e := sjson.SetBytes(nativeResp, "upstream_request_id", hhResp.RequestID); e == nil {
+				nativeResp = rewritten
+			}
+		}
 		c.Data(http.StatusOK, "application/json", nativeResp)
 		return hhResp.Output.TaskID, responseBody, nil
 	}
 
-	// 转换为 OpenAI 格式响应返回客户端
 	openAIResp := dto.NewOpenAIVideo()
 	openAIResp.ID = info.PublicTaskID
 	openAIResp.TaskID = info.PublicTaskID
@@ -313,7 +444,6 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 	return hhResp.Output.TaskID, responseBody, nil
 }
 
-// FetchTask 查询任务状态
 func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy string) (*http.Response, error) {
 	taskID, ok := body["task_id"].(string)
 	if !ok {
@@ -344,7 +474,6 @@ func (a *TaskAdaptor) GetChannelName() string {
 	return ChannelName
 }
 
-// ParseTaskResult 解析轮询任务结果
 func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, error) {
 	var hhResp HappyHorseResponse
 	if err := common.Unmarshal(respBody, &hhResp); err != nil {
@@ -362,7 +491,6 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		taskResult.Status = model.TaskStatusInProgress
 	case "SUCCEEDED":
 		taskResult.Status = model.TaskStatusSuccess
-		// 阿里云百炼直接返回视频 URL，无需额外代理端点
 		taskResult.Url = hhResp.Output.VideoURL
 	case "FAILED", "CANCELED", "UNKNOWN":
 		taskResult.Status = model.TaskStatusFailure
@@ -380,7 +508,6 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 	return &taskResult, nil
 }
 
-// ConvertToOpenAIVideo 将存储的任务数据转换为 OpenAI 视频格式
 func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
 	var hhResp HappyHorseResponse
 	if err := common.Unmarshal(task.Data, &hhResp); err != nil {
@@ -412,9 +539,6 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
 	return common.Marshal(openAIResp)
 }
 
-// ConvertToDashScopeNative 将存储的任务数据转换为 DashScope 原生响应格式。
-// task.Data 由轮询持续刷新为最新的 dashscope 响应，此处仅把 output.task_id
-// 改写为本平台公开 task ID，保持其余原生字段（task_status / video_url 等）不变。
 func (a *TaskAdaptor) ConvertToDashScopeNative(task *model.Task) ([]byte, error) {
 	data := task.Data
 	if len(data) == 0 {
@@ -423,6 +547,16 @@ func (a *TaskAdaptor) ConvertToDashScopeNative(task *model.Task) ([]byte, error)
 	rewritten, err := sjson.SetBytes(data, "output.task_id", task.TaskID)
 	if err != nil {
 		return nil, errors.Wrap(err, "set output.task_id failed")
+	}
+	if task.PrivateData.RequestID != "" {
+		if updated, setErr := sjson.SetBytes(rewritten, "request_id", task.PrivateData.RequestID); setErr == nil {
+			rewritten = updated
+		}
+	}
+	if task.PrivateData.UpstreamRequestID != "" {
+		if updated, setErr := sjson.SetBytes(rewritten, "upstream_request_id", task.PrivateData.UpstreamRequestID); setErr == nil {
+			rewritten = updated
+		}
 	}
 	return rewritten, nil
 }

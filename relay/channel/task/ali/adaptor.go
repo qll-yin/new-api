@@ -16,7 +16,9 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/samber/lo"
+	"github.com/tidwall/sjson"
 
 	"github.com/gin-gonic/gin"
 	"github.com/pkg/errors"
@@ -239,10 +241,13 @@ func ProcessAliOtherRatios(aliReq *AliVideoRequest) (map[string]float64, error) 
 		}
 		resolution = toResolution
 	} else {
-		resolution = strings.ToUpper(aliReq.Parameters.Resolution)
-		if !strings.HasSuffix(resolution, "P") {
-			resolution = resolution + "P"
+		resolution = ratio_setting.NormalizeVideoResolution(aliReq.Parameters.Resolution)
+	}
+	if multiplier, normalizedResolution, ok := ratio_setting.GetVideoResolutionMultiplier(aliReq.Model, resolution); ok {
+		if normalizedResolution != "" {
+			otherRatios[fmt.Sprintf("resolution-%s", normalizedResolution)] = multiplier
 		}
+		return otherRatios, nil
 	}
 	if otherRatio, ok := aliRatios[aliReq.Model]; ok {
 		if ratio, ok := otherRatio[resolution]; ok {
@@ -389,6 +394,10 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 		taskErr = service.TaskErrorWrapper(errors.Wrapf(err, "body: %s", responseBody), "unmarshal_response_body_failed", http.StatusInternalServerError)
 		return
 	}
+	if aliResp.RequestID != "" {
+		c.Set(common.UpstreamRequestIdKey, aliResp.RequestID)
+		c.Header(common.UpstreamRequestIdKey, aliResp.RequestID)
+	}
 
 	// 检查错误
 	if aliResp.Code != "" {
@@ -399,6 +408,24 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 	if aliResp.Output.TaskID == "" {
 		taskErr = service.TaskErrorWrapper(fmt.Errorf("task_id is empty"), "invalid_response", http.StatusInternalServerError)
 		return
+	}
+	if c.GetBool("dashscope_native") {
+		nativeResp := responseBody
+		if rewritten, e := sjson.SetBytes(nativeResp, "output.task_id", info.PublicTaskID); e == nil {
+			nativeResp = rewritten
+		}
+		if requestID := c.GetString(common.RequestIdKey); requestID != "" {
+			if rewritten, e := sjson.SetBytes(nativeResp, "request_id", requestID); e == nil {
+				nativeResp = rewritten
+			}
+		}
+		if aliResp.RequestID != "" {
+			if rewritten, e := sjson.SetBytes(nativeResp, "upstream_request_id", aliResp.RequestID); e == nil {
+				nativeResp = rewritten
+			}
+		}
+		c.Data(http.StatusOK, "application/json", nativeResp)
+		return aliResp.Output.TaskID, responseBody, nil
 	}
 
 	// 转换为 OpenAI 格式响应
@@ -517,6 +544,28 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
 	}
 
 	return common.Marshal(openAIResp)
+}
+
+func (a *TaskAdaptor) ConvertToDashScopeNative(task *model.Task) ([]byte, error) {
+	data := task.Data
+	if len(data) == 0 {
+		return nil, errors.New("task data is empty")
+	}
+	rewritten, err := sjson.SetBytes(data, "output.task_id", task.TaskID)
+	if err != nil {
+		return nil, errors.Wrap(err, "set output.task_id failed")
+	}
+	if task.PrivateData.RequestID != "" {
+		if updated, setErr := sjson.SetBytes(rewritten, "request_id", task.PrivateData.RequestID); setErr == nil {
+			rewritten = updated
+		}
+	}
+	if task.PrivateData.UpstreamRequestID != "" {
+		if updated, setErr := sjson.SetBytes(rewritten, "upstream_request_id", task.PrivateData.UpstreamRequestID); setErr == nil {
+			rewritten = updated
+		}
+	}
+	return rewritten, nil
 }
 
 func convertAliStatus(aliStatus string) string {

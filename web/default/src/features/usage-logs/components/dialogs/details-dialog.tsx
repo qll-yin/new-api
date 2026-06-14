@@ -738,6 +738,28 @@ export function DetailsDialog(props: DetailsDialogProps) {
             </DetailSection>
           )}
 
+          {/* Task details */}
+          {other && (other.is_task || other.task_id || other.task_status) && (
+            <DetailSection label={t('Task ID')}>
+              {other.task_id && (
+                <DetailRow label={t('Task ID')} value={other.task_id} mono />
+              )}
+              {other.task_status && (
+                <DetailRow label={t('Status')} value={other.task_status} mono />
+              )}
+              {other.task_progress && (
+                <DetailRow
+                  label={t('Progress')}
+                  value={other.task_progress}
+                  mono
+                />
+              )}
+              {other.reason && (
+                <DetailRow label={t('Reason')} value={other.reason} />
+              )}
+            </DetailSection>
+          )}
+
           {/* Refund details (type=6) */}
           {isRefund && other && (other.task_id || other.reason) && (
             <DetailSection label={t('Refund Details')}>

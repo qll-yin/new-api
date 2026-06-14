@@ -52,8 +52,18 @@ function renderQuotaType(type, t) {
   }
 }
 
-// Render vendor name
-const renderVendor = (vendorName, vendorIcon, t) => {
+function renderBillingType(record, t) {
+  if (record?.billing_mode === 'video') {
+    return (
+      <Tag color='indigo' shape='circle'>
+        {t('视频计费')}
+      </Tag>
+    );
+  }
+  return renderQuotaType(parseInt(record?.quota_type), t);
+}
+
+const renderVendor = (vendorName, vendorIcon) => {
   if (!vendorName) return '-';
   return (
     <Tag
@@ -66,7 +76,6 @@ const renderVendor = (vendorName, vendorIcon, t) => {
   );
 };
 
-// Render tags list using RenderUtils
 const renderTags = (text) => {
   if (!text) return '-';
   const tagsArr = text.split(',').filter((tag) => tag.trim());
@@ -92,7 +101,7 @@ function renderSupportedEndpoints(endpoints) {
   }
   return (
     <Space wrap>
-      {endpoints.map((endpoint, idx) => (
+      {endpoints.map((endpoint) => (
         <Tag key={endpoint} color={stringToColor(endpoint)} shape='circle'>
           {endpoint}
         </Tag>
@@ -137,21 +146,16 @@ export const getPricingTableColumns = ({
   const endpointColumn = {
     title: t('可用端点类型'),
     dataIndex: 'supported_endpoint_types',
-    render: (text, record, index) => {
-      return renderSupportedEndpoints(text);
-    },
+    render: (text) => renderSupportedEndpoints(text),
   };
 
   const modelNameColumn = {
     title: t('模型名称'),
     dataIndex: 'model_name',
-    render: (text, record, index) => {
-      return renderModelTag(text, {
-        onClick: () => {
-          copyText(text);
-        },
-      });
-    },
+    render: (text) =>
+      renderModelTag(text, {
+        onClick: () => copyText(text),
+      }),
     onFilter: (value, record) =>
       record.model_name.toLowerCase().includes(value.toLowerCase()),
   };
@@ -159,9 +163,7 @@ export const getPricingTableColumns = ({
   const quotaColumn = {
     title: t('计费类型'),
     dataIndex: 'quota_type',
-    render: (text, record, index) => {
-      return renderQuotaType(parseInt(text), t);
-    },
+    render: (_text, record) => renderBillingType(record, t),
     sorter: (a, b) => a.quota_type - b.quota_type,
   };
 
@@ -180,7 +182,7 @@ export const getPricingTableColumns = ({
   const vendorColumn = {
     title: t('供应商'),
     dataIndex: 'vendor_name',
-    render: (text, record) => renderVendor(text, record.vendor_icon, t),
+    render: (text, record) => renderVendor(text, record.vendor_icon),
   };
 
   const baseColumns = [
@@ -195,7 +197,7 @@ export const getPricingTableColumns = ({
     title: () => (
       <div className='flex items-center space-x-1'>
         <span>{t('倍率')}</span>
-        <Tooltip content={t('倍率是为了方便换算不同价格的模型')}>
+        <Tooltip content={t('倍率用于方便换算不同价格的模型')}>
           <IconHelpCircle
             className='text-blue-500 cursor-pointer'
             onClick={() => {
@@ -207,7 +209,7 @@ export const getPricingTableColumns = ({
       </div>
     ),
     dataIndex: 'model_ratio',
-    render: (text, record, index) => {
+    render: (text, record) => {
       const completionRatio = parseFloat(record.completion_ratio.toFixed(3));
       const priceData = getPriceData(record);
 
@@ -232,7 +234,7 @@ export const getPricingTableColumns = ({
     title: siteDisplayType === 'TOKENS' ? t('计费摘要') : t('模型价格'),
     dataIndex: 'model_price',
     ...(isMobile ? {} : { fixed: 'right' }),
-    render: (text, record, index) => {
+    render: (_text, record) => {
       const priceData = getPriceData(record);
       const priceItems = getModelPriceItems(priceData, t, siteDisplayType);
 
@@ -251,9 +253,7 @@ export const getPricingTableColumns = ({
 
   const columns = [...baseColumns];
   columns.push(endpointColumn);
-  if (showRatio) {
-    columns.push(ratioColumn);
-  }
+  if (showRatio) columns.push(ratioColumn);
   columns.push(priceColumn);
   return columns;
 };

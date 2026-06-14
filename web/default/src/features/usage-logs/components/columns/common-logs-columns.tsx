@@ -48,6 +48,7 @@ import {
   isViolationFeeLog,
   renderAuditContent,
 } from '../../lib/format'
+import { taskStatusMapper } from '../../lib/mappers'
 import {
   isDisplayableLogType,
   isTimingLogType,
@@ -63,6 +64,25 @@ interface DetailSegment {
   text: string
   muted?: boolean
   danger?: boolean
+}
+
+function getTaskStatusSummary(
+  other: LogOtherData | null | undefined,
+  t: (key: string, opts?: Record<string, unknown>) => string
+): {
+  label: string
+  variant: StatusBadgeProps['variant']
+  progress?: string
+} | null {
+  if (!other || (!other.is_task && !other.task_id) || !other.task_status) {
+    return null
+  }
+
+  return {
+    label: t(taskStatusMapper.getLabel(other.task_status)),
+    variant: taskStatusMapper.getVariant(other.task_status),
+    progress: other.task_progress,
+  }
 }
 
 function formatRatioCompact(ratio: number | undefined): string {
@@ -134,6 +154,27 @@ function buildDetailSegments(
   if (!other) return []
 
   const segments: DetailSegment[] = []
+  if (other.is_task || other.task_id) {
+    if (other.task_status) {
+      segments.push({
+        text: `${t('Status')}: ${other.task_status}`,
+        danger:
+          other.task_status === 'FAILURE' || other.task_status === 'FAILED',
+      })
+    }
+    if (other.task_id) {
+      segments.push({
+        text: `${t('Task ID')}: ${other.task_id}`,
+        muted: true,
+      })
+    }
+    if (other.reason) {
+      segments.push({
+        text: `${t('Reason')}: ${other.reason}`,
+        muted: true,
+      })
+    }
+  }
 
   const priceOpts = { digitsLarge: 4, digitsSmall: 6, abbreviate: false }
   const formatPrice = (price: number) =>
@@ -754,6 +795,7 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
         const [dialogOpen, setDialogOpen] = useState(false)
         const log = row.original
         const other = parseLogOther(log.other)
+        const taskStatus = getTaskStatusSummary(other, t)
 
         const segments = buildDetailSegments(log, other, t)
         const primary = segments[0]
@@ -761,38 +803,58 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
 
         return (
           <>
-            <button
-              type='button'
-              className='group flex max-w-[200px] items-center gap-1 text-left text-xs'
-              onClick={() => setDialogOpen(true)}
-              title={t('Click to view full details')}
-            >
-              {primary ? (
-                <span
-                  className={cn(
-                    'truncate leading-snug group-hover:underline',
-                    primary.muted
-                      ? 'text-muted-foreground/60'
-                      : primary.danger
-                        ? 'text-red-600 dark:text-red-400'
-                        : 'text-foreground'
-                  )}
-                >
-                  {primary.text}
-                  {hasMore && (
-                    <span className='text-muted-foreground/40 ml-0.5'>
-                      +{segments.length - 1}
-                    </span>
-                  )}
-                </span>
-              ) : log.content ? (
-                <span className='text-muted-foreground truncate group-hover:underline'>
-                  {log.content}
-                </span>
-              ) : (
-                <span className='text-muted-foreground/40'>—</span>
+            <div className='flex max-w-[220px] flex-col gap-1'>
+              {taskStatus && (
+                <>
+                  {/* 异步视频任务的状态在列表中直接展示，避免只能点进详情才能判断任务是否失败。 */}
+                  <div className='flex flex-wrap items-center gap-1.5'>
+                    <StatusBadge
+                      label={taskStatus.label}
+                      variant={taskStatus.variant}
+                      size='sm'
+                      copyable={false}
+                    />
+                    {taskStatus.progress && (
+                      <span className='text-muted-foreground font-mono text-[11px]'>
+                        {taskStatus.progress}
+                      </span>
+                    )}
+                  </div>
+                </>
               )}
-            </button>
+              <button
+                type='button'
+                className='group flex max-w-[200px] items-center gap-1 text-left text-xs'
+                onClick={() => setDialogOpen(true)}
+                title={t('Click to view full details')}
+              >
+                {primary ? (
+                  <span
+                    className={cn(
+                      'truncate leading-snug group-hover:underline',
+                      primary.muted
+                        ? 'text-muted-foreground/60'
+                        : primary.danger
+                          ? 'text-red-600 dark:text-red-400'
+                          : 'text-foreground'
+                    )}
+                  >
+                    {primary.text}
+                    {hasMore && (
+                      <span className='text-muted-foreground/40 ml-0.5'>
+                        +{segments.length - 1}
+                      </span>
+                    )}
+                  </span>
+                ) : log.content ? (
+                  <span className='text-muted-foreground truncate group-hover:underline'>
+                    {log.content}
+                  </span>
+                ) : (
+                  <span className='text-muted-foreground/40'>—</span>
+                )}
+              </button>
+            </div>
             <DetailsDialog
               log={log}
               isAdmin={isAdmin}

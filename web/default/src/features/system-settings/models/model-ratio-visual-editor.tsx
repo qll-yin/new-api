@@ -64,6 +64,7 @@ import { buildModelRatioColumns } from './model-ratio-table-columns'
 
 type ModelRatioVisualEditorProps = {
   savedModelPrice: string
+  savedVideoModelConfig: string
   savedModelRatio: string
   savedCacheRatio: string
   savedCreateCacheRatio: string
@@ -74,6 +75,7 @@ type ModelRatioVisualEditorProps = {
   savedBillingMode: string
   savedBillingExpr: string
   modelPrice: string
+  videoModelConfig: string
   modelRatio: string
   cacheRatio: string
   createCacheRatio: string
@@ -100,6 +102,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
 >(function ModelRatioVisualEditor(
   {
     savedModelPrice,
+    savedVideoModelConfig,
     savedModelRatio,
     savedCacheRatio,
     savedCreateCacheRatio,
@@ -110,6 +113,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
     savedBillingMode,
     savedBillingExpr,
     modelPrice,
+    videoModelConfig,
     modelRatio,
     cacheRatio,
     createCacheRatio,
@@ -181,6 +185,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
   const models = useMemo(() => {
     const savedRows = buildModelSnapshots({
       modelPrice: savedModelPrice,
+      videoModelConfig: savedVideoModelConfig,
       modelRatio: savedModelRatio,
       cacheRatio: savedCacheRatio,
       createCacheRatio: savedCreateCacheRatio,
@@ -193,6 +198,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
     })
     const draftRows = buildModelSnapshots({
       modelPrice,
+      videoModelConfig,
       modelRatio,
       cacheRatio,
       createCacheRatio,
@@ -228,6 +234,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
       .sort((a, b) => a.name.localeCompare(b.name))
   }, [
     savedModelPrice,
+    savedVideoModelConfig,
     savedModelRatio,
     savedCacheRatio,
     savedCreateCacheRatio,
@@ -238,6 +245,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
     savedBillingMode,
     savedBillingExpr,
     modelPrice,
+    videoModelConfig,
     modelRatio,
     cacheRatio,
     createCacheRatio,
@@ -255,6 +263,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
         (acc, model) => {
           const mode =
             model.billingMode === 'per-request' ||
+            model.billingMode === 'video' ||
             model.billingMode === 'tiered_expr'
               ? model.billingMode
               : 'per-token'
@@ -264,8 +273,9 @@ const ModelRatioVisualEditorComponent = forwardRef<
         {
           'per-token': 0,
           'per-request': 0,
+          video: 0,
           tiered_expr: 0,
-        } as Record<'per-token' | 'per-request' | 'tiered_expr', number>
+        } as Record<'per-token' | 'per-request' | 'video' | 'tiered_expr', number>
       ),
     [models]
   )
@@ -283,8 +293,11 @@ const ModelRatioVisualEditorComponent = forwardRef<
         imageRatio: editableModel.imageRatio,
         audioRatio: editableModel.audioRatio,
         audioCompletionRatio: editableModel.audioCompletionRatio,
+        videoConfig: editableModel.videoConfig,
         billingMode:
-          editableModel.billingMode === 'tiered_expr'
+          editableModel.billingMode === 'video'
+            ? 'video'
+            : editableModel.billingMode === 'tiered_expr'
             ? 'tiered_expr'
             : editableModel.price && editableModel.price !== ''
               ? 'per-request'
@@ -361,8 +374,13 @@ const ModelRatioVisualEditorComponent = forwardRef<
         billingExpr,
         { fallback: {}, silent: true }
       )
+      const videoConfigMap = safeJsonParse<Record<string, unknown>>(
+        videoModelConfig,
+        { fallback: {}, silent: true }
+      )
 
       delete priceMap[name]
+      delete videoConfigMap[name]
       delete ratioMap[name]
       delete cacheMap[name]
       delete createCacheMap[name]
@@ -374,6 +392,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
       delete billingExprMap[name]
 
       onChange('ModelPrice', JSON.stringify(priceMap, null, 2))
+      onChange('VideoModelConfig', JSON.stringify(videoConfigMap, null, 2))
       onChange('ModelRatio', JSON.stringify(ratioMap, null, 2))
       onChange('CacheRatio', JSON.stringify(cacheMap, null, 2))
       onChange('CreateCacheRatio', JSON.stringify(createCacheMap, null, 2))
@@ -395,6 +414,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
     },
     [
       modelPrice,
+      videoModelConfig,
       modelRatio,
       cacheRatio,
       createCacheRatio,
@@ -483,6 +503,10 @@ const ModelRatioVisualEditorComponent = forwardRef<
         billingExpr,
         { fallback: {}, silent: true }
       )
+      const videoConfigMap = safeJsonParse<Record<string, unknown>>(
+        videoModelConfig,
+        { fallback: {}, silent: true }
+      )
 
       const setIfPresent = (
         target: Record<string, number>,
@@ -496,6 +520,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
 
       targetNames.forEach((name) => {
         delete priceMap[name]
+        delete videoConfigMap[name]
         delete ratioMap[name]
         delete cacheMap[name]
         delete createCacheMap[name]
@@ -527,8 +552,12 @@ const ModelRatioVisualEditorComponent = forwardRef<
           setIfPresent(imageMap, name, data.imageRatio)
           setIfPresent(audioMap, name, data.audioRatio)
           setIfPresent(audioCompletionMap, name, data.audioCompletionRatio)
+        } else if (data.billingMode === 'video') {
+          setIfPresent(priceMap, name, data.price)
+          videoConfigMap[name] = data.videoConfig || {}
         } else if (data.price && data.price !== '') {
           setIfPresent(priceMap, name, data.price)
+          delete videoConfigMap[name]
         } else {
           setIfPresent(ratioMap, name, data.ratio)
           setIfPresent(cacheMap, name, data.cacheRatio)
@@ -541,6 +570,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
       })
 
       onChange('ModelPrice', JSON.stringify(priceMap, null, 2))
+      onChange('VideoModelConfig', JSON.stringify(videoConfigMap, null, 2))
       onChange('ModelRatio', JSON.stringify(ratioMap, null, 2))
       onChange('CacheRatio', JSON.stringify(cacheMap, null, 2))
       onChange('CreateCacheRatio', JSON.stringify(createCacheMap, null, 2))
@@ -562,6 +592,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
     },
     [
       modelPrice,
+      videoModelConfig,
       modelRatio,
       cacheRatio,
       createCacheRatio,
@@ -638,6 +669,11 @@ const ModelRatioVisualEditorComponent = forwardRef<
                     label: 'Per-request',
                     value: 'per-request',
                     count: modeCounts['per-request'],
+                  },
+                  {
+                    label: 'Video',
+                    value: 'video',
+                    count: modeCounts.video,
                   },
                   {
                     label: 'Expression',
@@ -772,6 +808,7 @@ export const ModelRatioVisualEditor = memo(
   (prevProps, nextProps) => {
     return (
       prevProps.modelPrice === nextProps.modelPrice &&
+      prevProps.videoModelConfig === nextProps.videoModelConfig &&
       prevProps.modelRatio === nextProps.modelRatio &&
       prevProps.cacheRatio === nextProps.cacheRatio &&
       prevProps.createCacheRatio === nextProps.createCacheRatio &&

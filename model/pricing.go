@@ -36,6 +36,7 @@ type Pricing struct {
 	BillingMode            string                  `json:"billing_mode,omitempty"`
 	BillingExpr            string                  `json:"billing_expr,omitempty"`
 	PricingVersion         string                  `json:"pricing_version,omitempty"`
+	VideoModelConfig       *ratio_setting.VideoModelConfig `json:"video_model_config,omitempty"`
 }
 
 type PricingVendor struct {
@@ -331,10 +332,19 @@ func updatePricing() {
 			audioCompletionRatio := ratio_setting.GetAudioCompletionRatio(model)
 			pricing.AudioCompletionRatio = &audioCompletionRatio
 		}
-		if billingMode := billing_setting.GetBillingMode(model); billingMode == "tiered_expr" {
-			if expr, ok := billing_setting.GetBillingExpr(model); ok && strings.TrimSpace(expr) != "" {
+		if billingMode := billing_setting.GetBillingMode(model); billingMode != "" {
+			switch billingMode {
+			case billing_setting.BillingModeTieredExpr:
+				if expr, ok := billing_setting.GetBillingExpr(model); ok && strings.TrimSpace(expr) != "" {
+					pricing.BillingMode = billingMode
+					pricing.BillingExpr = expr
+				}
+			case "video":
 				pricing.BillingMode = billingMode
-				pricing.BillingExpr = expr
+				if cfg, ok := ratio_setting.GetVideoModelConfig(model); ok {
+					cfgCopy := cfg
+					pricing.VideoModelConfig = &cfgCopy
+				}
 			}
 		}
 		pricingMap = append(pricingMap, pricing)

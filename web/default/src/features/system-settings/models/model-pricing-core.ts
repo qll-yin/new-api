@@ -37,7 +37,14 @@ export type ModelPricingFormValues = z.infer<
   ReturnType<typeof createModelPricingSchema>
 >
 
-export type PricingMode = 'per-token' | 'per-request' | 'tiered_expr'
+export type PricingMode = 'per-token' | 'per-request' | 'tiered_expr' | 'video'
+
+export type VideoResolution = '480P' | '720P' | '1080P'
+
+export type VideoModelConfigData = {
+  baseResolution?: string
+  resolutionMultipliers?: Record<string, string>
+}
 
 export type LaneKey =
   | 'completion'
@@ -60,6 +67,7 @@ export type ModelRatioData = {
   billingMode?: PricingMode
   billingExpr?: string
   requestRuleExpr?: string
+  videoConfig?: VideoModelConfigData
 }
 
 export type PreviewRow = {
@@ -70,6 +78,8 @@ export type PreviewRow = {
 }
 
 export const numericDraftRegex = /^(\d+(\.\d*)?|\.\d*)?$/
+
+export const videoResolutionOrder: VideoResolution[] = ['480P', '720P', '1080P']
 
 export const EMPTY_LANE_PRICES: Record<LaneKey, string> = {
   completion: '',
@@ -154,6 +164,17 @@ export function toNumberOrNull(value: unknown): number | null {
   return Number.isFinite(num) ? num : null
 }
 
+export function normalizeVideoResolution(value?: string): string {
+  const normalized = String(value || '')
+    .trim()
+    .toUpperCase()
+  if (!normalized) return ''
+  if (normalized === '480' || normalized === '720' || normalized === '1080') {
+    return `${normalized}P`
+  }
+  return normalized
+}
+
 function ratioToBasePrice(ratio: unknown): string {
   const num = toNumberOrNull(ratio)
   if (num === null) return ''
@@ -205,6 +226,34 @@ export function createInitialLaneState(data?: ModelRatioData | null) {
   }
 }
 
+export function createInitialVideoState(data?: ModelRatioData | null) {
+  const baseResolution = normalizeVideoResolution(
+    data?.videoConfig?.baseResolution || '720P'
+  )
+  const basePrice = data?.price || ''
+  const basePriceNumber = toNumberOrNull(basePrice)
+  const resolutionMultipliers = data?.videoConfig?.resolutionMultipliers || {}
+
+  const resolutionPrices = Object.fromEntries(
+    videoResolutionOrder.map((resolution) => {
+      if (resolution === baseResolution) {
+        return [resolution, basePrice]
+      }
+      const multiplier = toNumberOrNull(resolutionMultipliers[resolution])
+      if (basePriceNumber === null || multiplier === null) {
+        return [resolution, '']
+      }
+      return [resolution, formatPricingNumber(basePriceNumber * multiplier)]
+    })
+  ) as Record<VideoResolution, string>
+
+  return {
+    baseResolution: (baseResolution || '720P') as VideoResolution,
+    basePrice,
+    resolutionPrices,
+  }
+}
+
 export function buildPreviewRows(
   values: ModelPricingFormValues,
   mode: PricingMode,
@@ -213,6 +262,9 @@ export function buildPreviewRows(
   promptPrice: string,
   lanePrices: Record<LaneKey, string>,
   laneEnabled: Record<LaneKey, boolean>,
+  videoBaseResolution: VideoResolution,
+  videoBasePrice: string,
+  videoResolutionPrices: Record<VideoResolution, string>,
   t: (key: string) => string
 ): PreviewRow[] {
   if (mode === 'tiered_expr') {
@@ -235,6 +287,28 @@ export function buildPreviewRows(
         label: 'ModelPrice',
         value: values.price || t('Empty'),
       },
+    ]
+  }
+
+  if (mode === 'video') {
+    return [
+      {
+        key: 'videoBasePrice',
+        label: 'ModelPrice',
+        value: videoBasePrice || t('Empty'),
+      },
+      {
+        key: 'videoBaseResolution',
+        label: t('Base resolution'),
+        value: videoBaseResolution,
+      },
+      ...videoResolutionOrder.map((resolution) => ({
+        key: `video-${resolution}`,
+        label: t('{{resolution}} price', { resolution }),
+        value: videoResolutionPrices[resolution]
+          ? `$${videoResolutionPrices[resolution]} / ${t('second')}`
+          : t('Empty'),
+      })),
     ]
   }
 

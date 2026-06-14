@@ -2577,7 +2577,7 @@
     "私有部署地址": "Private Deployment Address",
     "私有镜像仓库的密码": "Password for private image registry",
     "私有镜像仓库的用户名": "Username for private image registry",
-    "秒": "Second",
+    "秒": "second",
     "移动": "",
     "移动请求头": "",
     "移除": "Remove",
@@ -3821,6 +3821,14 @@
     "并确认自行承担部署": "confirm that I bear legal responsibility arising from deployment",
     "运营和收费行为产生的法律责任": "operation and charging behavior",
     "，": ", ",
-    "、": ", "
+    "、": ", ",
+    "视频计费": "Video billing",
+    "视频基础单价": "Video base price",
+    "视频价格": "Video price",
+    "基准分辨率": "Base resolution",
+    "普通文本模型用按量或按次即可；视频模型请切到视频计费；如果价格需要跟请求参数或请求头联动，请切到表达式 / 阶梯计费。": "Use pay-as-you-go or pay-per-request for regular text models; switch to video billing for video models; if pricing needs to follow request params or headers, switch to expression / tiered billing.",
+    "当前基准分辨率，使用基础视频单价。": "Current base resolution, using the base video unit price.",
+    "可为该分辨率单独设置每秒单价。": "You can set a separate per-second price for this resolution.",
+    "基准分辨率下每秒生成视频的美元价格。": "USD price per second for video generation at the base resolution."
   }
 }

@@ -398,7 +398,7 @@ function renderCompactDetailSummary(summarySegments) {
   return (
     <div
       style={{
-        maxWidth: 180,
+        maxWidth: 260,
         lineHeight: 1.35,
       }}
     >
@@ -472,6 +472,55 @@ function getUsageLogDetailSummary(record, text, billingDisplayMode, t) {
       ? renderModelPriceSimple({ ...summaryOpts, provider: 'claude' })
       : renderModelPriceSimple({ ...summaryOpts, provider: 'openai' }),
   };
+}
+
+function getTaskStatusSummary(other, t) {
+  if (!other || (!other.is_task && !other.task_id) || !other.task_status) {
+    return null;
+  }
+
+  switch (other.task_status) {
+    case 'SUCCEEDED':
+      return {
+        label: t('成功'),
+        color: 'green',
+        progress: other.task_progress,
+      };
+    case 'PENDING':
+    case 'SUBMITTED':
+      return {
+        label: t('队列中'),
+        color: 'yellow',
+        progress: other.task_progress,
+      };
+    case 'RUNNING':
+    case 'IN_PROGRESS':
+      return {
+        label: t('执行中'),
+        color: 'blue',
+        progress: other.task_progress,
+      };
+    case 'FAILED':
+    case 'FAILURE':
+      return {
+        label: t('失败'),
+        color: 'red',
+        progress: other.task_progress,
+      };
+    case 'CANCELED':
+      return {
+        label: t('已取消'),
+        color: 'grey',
+        progress: other.task_progress,
+      };
+    case 'UNKNOWN':
+    default:
+      return {
+        label: t('未知状态'),
+        color: 'grey',
+        progress: other.task_progress,
+      };
+  }
 }
 
 export const getLogsColumns = ({
@@ -903,7 +952,7 @@ export const getLogsColumns = ({
       title: t('详情'),
       dataIndex: 'content',
       fixed: 'right',
-      width: 200,
+      width: 280,
       render: (text, record, index) => {
         const detailSummary = getUsageLogDetailSummary(
           record,
@@ -911,25 +960,59 @@ export const getLogsColumns = ({
           billingDisplayMode,
           t,
         );
+        const other = getLogOther(record.other);
+        const taskStatus = getTaskStatusSummary(other, t);
 
         if (!detailSummary) {
           return (
-            <Typography.Paragraph
-              ellipsis={{
-                rows: 2,
-                showTooltip: {
-                  type: 'popover',
-                  opts: { style: { width: 240 } },
-                },
-              }}
-              style={{ maxWidth: 200, marginBottom: 0 }}
-            >
-              {text}
-            </Typography.Paragraph>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {taskStatus ? (
+                <Space spacing={6} wrap>
+                  {/* 异步视频任务的状态在列表中直接展示，避免只能点进详情才能判断任务是否失败。 */}
+                  <Tag color={taskStatus.color} shape='circle'>
+                    {t('任务状态')}：{taskStatus.label}
+                  </Tag>
+                  {taskStatus.progress ? (
+                    <Typography.Text type='tertiary' size='small'>
+                      {taskStatus.progress}
+                    </Typography.Text>
+                  ) : null}
+                </Space>
+              ) : null}
+              <Typography.Paragraph
+                ellipsis={{
+                  rows: 2,
+                  showTooltip: {
+                    type: 'popover',
+                    opts: { style: { width: 320 } },
+                  },
+                }}
+                style={{ maxWidth: 260, marginBottom: 0 }}
+              >
+                {text}
+              </Typography.Paragraph>
+            </div>
           );
         }
 
-        return renderCompactDetailSummary(detailSummary.segments);
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {taskStatus ? (
+              <Space spacing={6} wrap>
+                {/* 异步视频任务的状态在列表中直接展示，避免只能点进详情才能判断任务是否失败。 */}
+                <Tag color={taskStatus.color} shape='circle'>
+                  {t('任务状态')}：{taskStatus.label}
+                </Tag>
+                {taskStatus.progress ? (
+                  <Typography.Text type='tertiary' size='small'>
+                    {taskStatus.progress}
+                  </Typography.Text>
+                ) : null}
+              </Space>
+            ) : null}
+            {renderCompactDetailSummary(detailSummary.segments)}
+          </div>
+        );
       },
     },
   ];

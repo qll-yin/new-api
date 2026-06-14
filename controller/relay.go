@@ -577,7 +577,11 @@ func RelayTask(c *gin.Context) {
 		service.LogTaskConsumption(c, relayInfo)
 
 		task := model.InitTask(result.Platform, relayInfo)
+		task.Status = model.TaskStatusSubmitted
+		task.Progress = "10%"
 		task.PrivateData.UpstreamTaskID = result.UpstreamTaskID
+		task.PrivateData.RequestID = c.GetString(common.RequestIdKey)
+		task.PrivateData.UpstreamRequestID = c.GetString(common.UpstreamRequestIdKey)
 		task.PrivateData.BillingSource = relayInfo.BillingSource
 		task.PrivateData.SubscriptionId = relayInfo.SubscriptionId
 		task.PrivateData.TokenId = relayInfo.TokenId
@@ -594,6 +598,8 @@ func RelayTask(c *gin.Context) {
 		task.Action = relayInfo.Action
 		if insertErr := task.Insert(); insertErr != nil {
 			common.SysError("insert task error: " + insertErr.Error())
+		} else {
+			service.SyncTaskStateLog(c.Request.Context(), task)
 		}
 	}
 
