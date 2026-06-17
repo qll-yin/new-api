@@ -43,11 +43,17 @@ export function Home() {
   if (content) {
     return (
       <PublicLayout showMainContainer={false}>
-        <main className='overflow-x-hidden'>
+        <main
+          className={
+            isUrl
+              ? 'box-border flex min-h-screen min-h-[100dvh] flex-col overflow-x-hidden pt-16'
+              : 'overflow-x-hidden'
+          }
+        >
           {isUrl ? (
             <iframe
               src={content}
-              className='h-screen w-full border-none'
+              className='min-h-0 flex-1 border-none'
               title={t('Custom Home Page')}
             />
           ) : (
