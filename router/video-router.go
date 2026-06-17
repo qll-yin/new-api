@@ -59,6 +59,13 @@ func SetVideoRouter(router *gin.Engine) {
 		dashScopeSubmitGroup.POST("/video-synthesis", controller.RelayTask)
 	}
 
+	dashScopeImage2VideoSubmitGroup := router.Group("/api/v1/services/aigc/image2video")
+	dashScopeImage2VideoSubmitGroup.Use(middleware.RouteTag("relay"))
+	dashScopeImage2VideoSubmitGroup.Use(middleware.HappyHorseRequestConvert(), middleware.TokenAuth(), middleware.Distribute())
+	{
+		dashScopeImage2VideoSubmitGroup.POST("/video-synthesis", controller.RelayTask)
+	}
+
 	dashScopeFetchGroup := router.Group("/api/v1/tasks")
 	dashScopeFetchGroup.Use(middleware.RouteTag("relay"))
 	dashScopeFetchGroup.Use(middleware.HappyHorseFetchConvert(), middleware.TokenAuth(), middleware.Distribute())

@@ -162,18 +162,18 @@ func taskModelName(task *model.Task) string {
 	return task.Properties.OriginModelName
 }
 
-func SyncTaskStateLog(ctx context.Context, task *model.Task) {
+func syncTaskStateLog(ctx context.Context, task *model.Task) bool {
 	if task == nil || task.PrivateData.RequestID == "" {
-		return
+		return false
 	}
 
 	log, exist, err := model.GetLatestLogByRequestID(task.PrivateData.RequestID, []int{model.LogTypeConsume, model.LogTypeError})
 	if err != nil {
 		logger.LogWarn(ctx, fmt.Sprintf("get task lifecycle log failed (task=%s): %s", task.TaskID, err.Error()))
-		return
+		return false
 	}
 	if !exist || log == nil {
-		return
+		return false
 	}
 
 	other, _ := common.StrToMap(log.Other)
@@ -195,24 +195,34 @@ func SyncTaskStateLog(ctx context.Context, task *model.Task) {
 	if task.PrivateData.ResultURL != "" {
 		other["result_url"] = task.PrivateData.ResultURL
 	}
+	if task.Status == model.TaskStatusFailure {
+		if log.Quota > 0 {
+			if _, ok := other["pre_consumed_quota"]; !ok {
+				other["pre_consumed_quota"] = log.Quota
+			}
+			other["actual_quota"] = 0
+			other["refunded_quota"] = log.Quota
+			log.Quota = 0
+		}
+		log.Type = model.LogTypeError
+	}
 	log.Other = common.MapToJsonStr(other)
 	if task.PrivateData.UpstreamRequestID != "" {
 		log.UpstreamRequestId = task.PrivateData.UpstreamRequestID
 	}
-	if task.Status == model.TaskStatusFailure {
-		log.Type = model.LogTypeError
-	}
 	if err = model.UpdateLog(log); err != nil {
 		logger.LogWarn(ctx, fmt.Sprintf("update task lifecycle log failed (task=%s): %s", task.TaskID, err.Error()))
+		return false
 	}
+	return true
+}
+
+func SyncTaskStateLog(ctx context.Context, task *model.Task) {
+	_ = syncTaskStateLog(ctx, task)
 }
 
 func rollbackTaskUsageStats(task *model.Task, quota int) {
-	if task == nil || quota <= 0 || task.PrivateData.RequestID == "" {
-		return
-	}
-	log, exist, err := model.GetLatestLogByRequestID(task.PrivateData.RequestID, []int{model.LogTypeConsume, model.LogTypeError})
-	if err != nil || !exist || log == nil || log.Type == model.LogTypeError {
+	if task == nil || quota <= 0 {
 		return
 	}
 	model.UpdateUserUsedQuota(task.UserId, -quota)
@@ -227,38 +237,37 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) {
 		return
 	}
 
-	// 1. 退还资金来源（钱包或订阅）
 	if err := taskAdjustFunding(task, -quota); err != nil {
-		logger.LogWarn(ctx, fmt.Sprintf("退还资金来源失败 task %s: %s", task.TaskID, err.Error()))
+		logger.LogWarn(ctx, fmt.Sprintf("閫€杩樿祫閲戞潵婧愬け璐?task %s: %s", task.TaskID, err.Error()))
 		return
 	}
 
-	// 2. 退还令牌额度
 	taskAdjustTokenQuota(ctx, task, -quota)
 	rollbackTaskUsageStats(task, quota)
-	SyncTaskStateLog(ctx, task)
 
-	// 3. 记录日志
+	if syncTaskStateLog(ctx, task) {
+		return
+	}
+
 	other := taskBillingOther(task)
 	other["task_id"] = task.TaskID
 	other["task_status"] = string(task.Status)
 	other["reason"] = reason
+	other["pre_consumed_quota"] = quota
+	other["actual_quota"] = 0
+	other["refunded_quota"] = quota
 	model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
 		UserId:    task.UserId,
-		LogType:   model.LogTypeRefund,
-		Content:   "",
+		LogType:   model.LogTypeError,
+		Content:   reason,
 		ChannelId: task.ChannelId,
 		ModelName: taskModelName(task),
-		Quota:     quota,
+		Quota:     0,
 		TokenId:   task.PrivateData.TokenId,
 		Group:     task.Group,
 		Other:     other,
 	})
 }
-
-// RecalculateTaskQuota 通用的异步差额结算。
-// actualQuota 是任务完成后的实际应扣额度，与预扣额度 (task.Quota) 做差额结算。
-// reason 用于日志记录（例如 "token重算" 或 "adaptor调整"）。
 func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int, reason string) {
 	if actualQuota <= 0 {
 		return

@@ -318,6 +318,16 @@ var defaultModelPrice = map[string]float64{
 	"happyhorse-1.0-i2v":             0.14,
 	"happyhorse-1.0-r2v":             0.14,
 	"happyhorse-1.0-video-edit":      0.14,
+	"wan2.7-t2v":                     0.14,
+	"wan2.7-i2v-2026-04-25":          0.14,
+	"wan2.7-r2v":                     0.14,
+	"wan2.7-videoedit":               0.14,
+	"wan2.2-animate-move":            0.14,
+	"wan2.2-animate-mix":             0.14,
+	"wan2.6-image":                   0.04,
+	"wan2.6-t2i":                     0.04,
+	"wan2.7-image":                   0.04,
+	"wan2.7-image-pro":               0.04,
 }
 
 var defaultVideoModelConfig = map[string]VideoModelConfig{
@@ -340,6 +350,42 @@ var defaultVideoModelConfig = map[string]VideoModelConfig{
 		},
 	},
 	"happyhorse-1.0-video-edit": {
+		BaseResolution: "720P",
+		ResolutionMultipliers: map[string]float64{
+			"1080P": 0.24 / 0.14,
+		},
+	},
+	"wan2.7-t2v": {
+		BaseResolution: "720P",
+		ResolutionMultipliers: map[string]float64{
+			"1080P": 0.24 / 0.14,
+		},
+	},
+	"wan2.7-i2v-2026-04-25": {
+		BaseResolution: "720P",
+		ResolutionMultipliers: map[string]float64{
+			"1080P": 0.24 / 0.14,
+		},
+	},
+	"wan2.7-r2v": {
+		BaseResolution: "720P",
+		ResolutionMultipliers: map[string]float64{
+			"1080P": 0.24 / 0.14,
+		},
+	},
+	"wan2.7-videoedit": {
+		BaseResolution: "720P",
+		ResolutionMultipliers: map[string]float64{
+			"1080P": 0.24 / 0.14,
+		},
+	},
+	"wan2.2-animate-move": {
+		BaseResolution: "720P",
+		ResolutionMultipliers: map[string]float64{
+			"1080P": 0.24 / 0.14,
+		},
+	},
+	"wan2.2-animate-mix": {
 		BaseResolution: "720P",
 		ResolutionMultipliers: map[string]float64{
 			"1080P": 0.24 / 0.14,

@@ -24,6 +24,11 @@ import (
 	"github.com/tidwall/sjson"
 )
 
+const (
+	dashScopeVideoSynthesisPath  = "/api/v1/services/aigc/video-generation/video-synthesis"
+	dashScopeImage2VideoTaskPath = "/api/v1/services/aigc/image2video/video-synthesis"
+)
+
 type HappyHorseRequest struct {
 	Model      string                `json:"model"`
 	Input      HappyHorseInput       `json:"input"`
@@ -49,6 +54,22 @@ type HappyHorseParameters struct {
 	Seed         *int   `json:"seed,omitempty"`
 }
 
+type LegacyWanAnimateRequest struct {
+	Model      string                      `json:"model"`
+	Input      LegacyWanAnimateInput       `json:"input"`
+	Parameters *LegacyWanAnimateParameters `json:"parameters,omitempty"`
+}
+
+type LegacyWanAnimateInput struct {
+	ImageURL  string `json:"image_url,omitempty"`
+	VideoURL  string `json:"video_url,omitempty"`
+	Watermark *bool  `json:"watermark,omitempty"`
+}
+
+type LegacyWanAnimateParameters struct {
+	Mode string `json:"mode,omitempty"`
+}
+
 type HappyHorseResponse struct {
 	Output    HappyHorseOutput `json:"output"`
 	RequestID string           `json:"request_id"`
@@ -58,15 +79,20 @@ type HappyHorseResponse struct {
 }
 
 type HappyHorseOutput struct {
-	TaskID        string `json:"task_id"`
-	TaskStatus    string `json:"task_status"`
-	SubmitTime    string `json:"submit_time,omitempty"`
-	ScheduledTime string `json:"scheduled_time,omitempty"`
-	EndTime       string `json:"end_time,omitempty"`
-	OrigPrompt    string `json:"orig_prompt,omitempty"`
-	VideoURL      string `json:"video_url,omitempty"`
-	Code          string `json:"code,omitempty"`
-	Message       string `json:"message,omitempty"`
+	TaskID        string                     `json:"task_id"`
+	TaskStatus    string                     `json:"task_status"`
+	SubmitTime    string                     `json:"submit_time,omitempty"`
+	ScheduledTime string                     `json:"scheduled_time,omitempty"`
+	EndTime       string                     `json:"end_time,omitempty"`
+	OrigPrompt    string                     `json:"orig_prompt,omitempty"`
+	VideoURL      string                     `json:"video_url,omitempty"`
+	Results       *LegacyWanAnimateResults   `json:"results,omitempty"`
+	Code          string                     `json:"code,omitempty"`
+	Message       string                     `json:"message,omitempty"`
+}
+
+type LegacyWanAnimateResults struct {
+	VideoURL string `json:"video_url,omitempty"`
 }
 
 type HappyHorseUsage struct {
@@ -75,11 +101,20 @@ type HappyHorseUsage struct {
 	Duration            happyHorseNumber `json:"duration,omitempty"`
 	SR                  happyHorseNumber `json:"SR,omitempty"`
 	VideoCount          happyHorseNumber `json:"video_count,omitempty"`
+	VideoDuration       happyHorseNumber `json:"video_duration,omitempty"`
+	VideoRatio          string           `json:"video_ratio,omitempty"`
 }
 
 type happyHorseRequestMetadata struct {
-	Media      []HappyHorseMedia     `json:"media"`
-	Parameters *HappyHorseParameters `json:"parameters"`
+	Input      *legacyWanAnimateMetadata `json:"input"`
+	Media      []HappyHorseMedia         `json:"media"`
+	Parameters map[string]any            `json:"parameters"`
+}
+
+type legacyWanAnimateMetadata struct {
+	ImageURL  string `json:"image_url"`
+	VideoURL  string `json:"video_url"`
+	Watermark *bool  `json:"watermark"`
 }
 
 type TaskAdaptor struct {
@@ -130,12 +165,12 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 	if err != nil {
 		return service.TaskErrorWrapperLocal(err, "invalid_request", http.StatusBadRequest)
 	}
-	if err := validateHappyHorseTaskRequest(req.Model, req.Prompt, meta.Media); err != nil {
+	if err := validateHappyHorseTaskRequest(req.Model, req.Prompt, meta); err != nil {
 		return service.TaskErrorWrapperLocal(err, "invalid_request", http.StatusBadRequest)
 	}
 
 	action := constant.TaskActionTextGenerate
-	if len(meta.Media) > 0 || req.HasImage() {
+	if len(meta.Media) > 0 || req.HasImage() || meta.Input != nil {
 		action = constant.TaskActionGenerate
 	}
 
@@ -148,7 +183,17 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 }
 
 func (a *TaskAdaptor) BuildRequestURL(info *relaycommon.RelayInfo) (string, error) {
-	return fmt.Sprintf("%s/api/v1/services/aigc/video-generation/video-synthesis", a.baseURL), nil
+	modelName := ""
+	if info != nil {
+		modelName = info.UpstreamModelName
+		if modelName == "" {
+			modelName = info.OriginModelName
+		}
+	}
+	if isLegacyWanAnimateModel(modelName) {
+		return fmt.Sprintf("%s%s", a.baseURL, dashScopeImage2VideoTaskPath), nil
+	}
+	return fmt.Sprintf("%s%s", a.baseURL, dashScopeVideoSynthesisPath), nil
 }
 
 func (a *TaskAdaptor) BuildRequestHeader(c *gin.Context, req *http.Request, info *relaycommon.RelayInfo) error {
@@ -164,21 +209,29 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		return nil, errors.Wrap(err, "get_task_request_failed")
 	}
 
-	hhReq, err := a.convertToHappyHorseRequest(info, taskReq)
+	body, err := a.convertToDashScopeRequest(info, taskReq)
 	if err != nil {
-		return nil, errors.Wrap(err, "convert_to_happyhorse_request_failed")
+		return nil, errors.Wrap(err, "convert_to_dashscope_request_failed")
 	}
-	logger.LogJson(c, "happyhorse video request body", hhReq)
+	logger.LogJson(c, "alibailian video request body", body)
 
-	bodyBytes, err := common.Marshal(hhReq)
+	bodyBytes, err := common.Marshal(body)
 	if err != nil {
-		return nil, errors.Wrap(err, "marshal_happyhorse_request_failed")
+		return nil, errors.Wrap(err, "marshal_dashscope_request_failed")
 	}
 	return bytes.NewReader(bodyBytes), nil
 }
 
+func isLegacyWanAnimateModel(model string) bool {
+	return strings.HasPrefix(model, "wan2.2-animate-")
+}
+
+func isWan27VideoModel(model string) bool {
+	return strings.HasPrefix(model, "wan2.7-")
+}
+
 func isVideoEditModel(model string) bool {
-	return strings.Contains(model, "video-edit")
+	return strings.Contains(model, "video-edit") || strings.Contains(model, "videoedit")
 }
 
 func isImageToVideoModel(model string) bool {
@@ -200,70 +253,262 @@ func parseHappyHorseMetadata(req relaycommon.TaskSubmitReq) (*happyHorseRequestM
 	return meta, nil
 }
 
-func happyHorseResolutionRatio(resolution string) float64 {
-	multiplier, _, ok := ratio_setting.GetVideoResolutionMultiplier("happyhorse-1.0-t2v", resolution)
-	if !ok {
-		return 1
-	}
-	return multiplier
-}
-
-func happyHorseResolutionLabelFromSR(sr happyHorseNumber) string {
-	return ratio_setting.NormalizeVideoResolution(strconv.FormatFloat(float64(sr), 'f', -1, 64))
-}
-
 func promptRequiredForModel(model string) bool {
-	return !isImageToVideoModel(model)
+	return !isImageToVideoModel(model) && !isLegacyWanAnimateModel(model)
 }
 
-func validateHappyHorseTaskRequest(model, prompt string, media []HappyHorseMedia) error {
+func validateHappyHorseTaskRequest(model, prompt string, meta *happyHorseRequestMetadata) error {
+	if meta == nil {
+		meta = &happyHorseRequestMetadata{}
+	}
 	if promptRequiredForModel(model) && strings.TrimSpace(prompt) == "" {
 		return fmt.Errorf("prompt is required")
 	}
 
+	if isLegacyWanAnimateModel(model) {
+		if meta.Input == nil {
+			return fmt.Errorf("%s requires input", model)
+		}
+		if strings.TrimSpace(meta.Input.ImageURL) == "" {
+			return fmt.Errorf("%s requires input.image_url", model)
+		}
+		if strings.TrimSpace(meta.Input.VideoURL) == "" {
+			return fmt.Errorf("%s requires input.video_url", model)
+		}
+		return nil
+	}
+
 	switch {
 	case isImageToVideoModel(model):
-		if len(media) != 1 {
-			return fmt.Errorf("happyhorse i2v requires exactly one first_frame media")
+		if len(meta.Media) == 0 {
+			return fmt.Errorf("%s requires first_frame media", model)
 		}
-		if media[0].Type != "first_frame" {
-			return fmt.Errorf("happyhorse i2v media type must be first_frame")
+		allowedTypes := map[string]bool{
+			"first_frame":   true,
+			"last_frame":    true,
+			"driving_audio": true,
 		}
-	case isReferenceToVideoModel(model):
-		if len(media) == 0 {
-			return fmt.Errorf("happyhorse r2v requires at least one reference_image")
-		}
-		for _, item := range media {
-			if item.Type != "reference_image" {
-				return fmt.Errorf("happyhorse r2v media type must be reference_image")
+		firstFrameCount := 0
+		for _, item := range meta.Media {
+			if !allowedTypes[item.Type] {
+				return fmt.Errorf("%s media type must be first_frame, last_frame or driving_audio", model)
+			}
+			if item.Type == "first_frame" {
+				firstFrameCount++
 			}
 		}
+		if firstFrameCount != 1 {
+			return fmt.Errorf("%s requires exactly one first_frame media", model)
+		}
+	case isReferenceToVideoModel(model):
+		if len(meta.Media) == 0 {
+			return fmt.Errorf("%s requires reference media", model)
+		}
+		allowedTypes := map[string]bool{
+			"reference_image": true,
+			"reference_video": true,
+			"reference_voice": true,
+		}
+		referenceFound := false
+		for _, item := range meta.Media {
+			if !allowedTypes[item.Type] {
+				return fmt.Errorf("%s media type must be reference_image, reference_video or reference_voice", model)
+			}
+			if item.Type == "reference_image" || item.Type == "reference_video" {
+				referenceFound = true
+			}
+		}
+		if !referenceFound {
+			return fmt.Errorf("%s requires reference_image or reference_video media", model)
+		}
 	case isVideoEditModel(model):
-		if len(media) == 0 {
-			return fmt.Errorf("happyhorse video-edit requires input media")
+		if len(meta.Media) == 0 {
+			return fmt.Errorf("%s requires input media", model)
 		}
 		videoCount := 0
-		for _, item := range media {
+		for _, item := range meta.Media {
 			switch item.Type {
 			case "video":
 				videoCount++
 			case "reference_image":
 			default:
-				return fmt.Errorf("happyhorse video-edit only supports video and reference_image media")
+				return fmt.Errorf("%s only supports video and reference_image media", model)
 			}
 		}
 		if videoCount != 1 {
-			return fmt.Errorf("happyhorse video-edit requires exactly one video media")
+			return fmt.Errorf("%s requires exactly one video media", model)
 		}
 	}
 
 	return nil
 }
 
-func (a *TaskAdaptor) convertToHappyHorseRequest(info *relaycommon.RelayInfo, req relaycommon.TaskSubmitReq) (*HappyHorseRequest, error) {
+func getUpstreamModel(info *relaycommon.RelayInfo, req relaycommon.TaskSubmitReq) string {
 	upstreamModel := req.Model
-	if info != nil && info.ChannelMeta != nil && info.IsModelMapped {
+	if info != nil && info.ChannelMeta != nil && info.IsModelMapped && info.UpstreamModelName != "" {
 		upstreamModel = info.UpstreamModelName
+	}
+	return upstreamModel
+}
+
+func defaultVideoResolutionForModel(model string) string {
+	if isLegacyWanAnimateModel(model) {
+		return ""
+	}
+	return "1080P"
+}
+
+func parseDuration(req relaycommon.TaskSubmitReq) (int, error) {
+	if req.Duration > 0 {
+		return req.Duration, nil
+	}
+	if req.Seconds != "" {
+		seconds, err := strconv.Atoi(req.Seconds)
+		if err != nil {
+			return 0, errors.Wrap(err, "convert seconds to int failed")
+		}
+		if seconds > 0 {
+			return seconds, nil
+		}
+	}
+	return 5, nil
+}
+
+func stringFromMap(params map[string]any, key string) string {
+	if params == nil {
+		return ""
+	}
+	raw, ok := params[key]
+	if !ok {
+		return ""
+	}
+	switch v := raw.(type) {
+	case string:
+		return v
+	default:
+		return strings.TrimSpace(fmt.Sprint(v))
+	}
+}
+
+func boolPtrFromMap(params map[string]any, key string) *bool {
+	if params == nil {
+		return nil
+	}
+	raw, ok := params[key]
+	if !ok || raw == nil {
+		return nil
+	}
+	switch v := raw.(type) {
+	case bool:
+		return &v
+	case string:
+		if parsed, err := strconv.ParseBool(v); err == nil {
+			return &parsed
+		}
+	}
+	return nil
+}
+
+func intPtrFromMap(params map[string]any, key string) *int {
+	if params == nil {
+		return nil
+	}
+	raw, ok := params[key]
+	if !ok || raw == nil {
+		return nil
+	}
+	switch v := raw.(type) {
+	case int:
+		return &v
+	case int32:
+		value := int(v)
+		return &value
+	case int64:
+		value := int(v)
+		return &value
+	case float64:
+		value := int(v)
+		return &value
+	case string:
+		if parsed, err := strconv.Atoi(v); err == nil {
+			return &parsed
+		}
+	}
+	return nil
+}
+
+func buildHappyHorseParameters(model string, req relaycommon.TaskSubmitReq, meta *happyHorseRequestMetadata) (*HappyHorseParameters, error) {
+	parameters := &HappyHorseParameters{
+		Resolution: defaultVideoResolutionForModel(model),
+	}
+	if req.Size != "" {
+		resolution := strings.ToUpper(req.Size)
+		if !strings.HasSuffix(resolution, "P") {
+			resolution += "P"
+		}
+		parameters.Resolution = resolution
+	}
+
+	if !isVideoEditModel(model) {
+		duration, err := parseDuration(req)
+		if err != nil {
+			return nil, err
+		}
+		parameters.Duration = &duration
+		if !isImageToVideoModel(model) {
+			parameters.Ratio = "16:9"
+		}
+	}
+
+	if meta != nil {
+		if resolution := stringFromMap(meta.Parameters, "resolution"); resolution != "" {
+			parameters.Resolution = strings.ToUpper(strings.TrimSpace(resolution))
+		}
+		if ratio := stringFromMap(meta.Parameters, "ratio"); ratio != "" {
+			parameters.Ratio = ratio
+		}
+		if duration := intPtrFromMap(meta.Parameters, "duration"); duration != nil {
+			parameters.Duration = duration
+		}
+		if watermark := boolPtrFromMap(meta.Parameters, "watermark"); watermark != nil {
+			parameters.Watermark = watermark
+		}
+		if audioSetting := stringFromMap(meta.Parameters, "audio_setting"); audioSetting != "" {
+			parameters.AudioSetting = audioSetting
+		}
+		if seed := intPtrFromMap(meta.Parameters, "seed"); seed != nil {
+			parameters.Seed = seed
+		}
+	}
+
+	if isVideoEditModel(model) {
+		parameters.Ratio = ""
+		parameters.Duration = nil
+	}
+	if isImageToVideoModel(model) {
+		parameters.Ratio = ""
+	}
+
+	return parameters, nil
+}
+
+func (a *TaskAdaptor) convertToDashScopeRequest(info *relaycommon.RelayInfo, req relaycommon.TaskSubmitReq) (any, error) {
+	upstreamModel := getUpstreamModel(info, req)
+	meta, err := parseHappyHorseMetadata(req)
+	if err != nil {
+		return nil, errors.Wrap(err, "unmarshal metadata failed")
+	}
+
+	if isLegacyWanAnimateModel(upstreamModel) {
+		return convertToLegacyWanAnimateRequest(upstreamModel, meta)
+	}
+	return convertToHappyHorseRequest(upstreamModel, req, meta)
+}
+
+func convertToHappyHorseRequest(upstreamModel string, req relaycommon.TaskSubmitReq, meta *happyHorseRequestMetadata) (*HappyHorseRequest, error) {
+	parameters, err := buildHappyHorseParameters(upstreamModel, req, meta)
+	if err != nil {
+		return nil, err
 	}
 
 	hhReq := &HappyHorseRequest{
@@ -271,72 +516,31 @@ func (a *TaskAdaptor) convertToHappyHorseRequest(info *relaycommon.RelayInfo, re
 		Input: HappyHorseInput{
 			Prompt: req.Prompt,
 		},
-		Parameters: &HappyHorseParameters{
-			Resolution: "1080P",
-		},
+		Parameters: parameters,
 	}
-
-	if req.Size != "" {
-		resolution := strings.ToUpper(req.Size)
-		if !strings.HasSuffix(resolution, "P") {
-			resolution += "P"
-		}
-		hhReq.Parameters.Resolution = resolution
-	}
-
-	if !isVideoEditModel(upstreamModel) {
-		duration := 5
-		if req.Duration > 0 {
-			duration = req.Duration
-		} else if req.Seconds != "" {
-			if seconds, err := strconv.Atoi(req.Seconds); err == nil {
-				duration = seconds
-			}
-		}
-		hhReq.Parameters.Duration = &duration
-
-		if !isImageToVideoModel(upstreamModel) {
-			hhReq.Parameters.Ratio = "16:9"
-		}
-	}
-
-	meta, err := parseHappyHorseMetadata(req)
-	if err != nil {
-		return nil, errors.Wrap(err, "unmarshal metadata failed")
-	}
-	if len(meta.Media) > 0 {
+	if meta != nil && len(meta.Media) > 0 {
 		hhReq.Input.Media = meta.Media
 	}
-	if meta.Parameters != nil {
-		if meta.Parameters.Resolution != "" {
-			hhReq.Parameters.Resolution = meta.Parameters.Resolution
-		}
-		if meta.Parameters.Ratio != "" {
-			hhReq.Parameters.Ratio = meta.Parameters.Ratio
-		}
-		if meta.Parameters.Duration != nil {
-			hhReq.Parameters.Duration = meta.Parameters.Duration
-		}
-		if meta.Parameters.Watermark != nil {
-			hhReq.Parameters.Watermark = meta.Parameters.Watermark
-		}
-		if meta.Parameters.AudioSetting != "" {
-			hhReq.Parameters.AudioSetting = meta.Parameters.AudioSetting
-		}
-		if meta.Parameters.Seed != nil {
-			hhReq.Parameters.Seed = meta.Parameters.Seed
-		}
-	}
-
-	if isVideoEditModel(upstreamModel) {
-		hhReq.Parameters.Ratio = ""
-		hhReq.Parameters.Duration = nil
-	}
-	if isImageToVideoModel(upstreamModel) {
-		hhReq.Parameters.Ratio = ""
-	}
-
 	return hhReq, nil
+}
+
+func convertToLegacyWanAnimateRequest(upstreamModel string, meta *happyHorseRequestMetadata) (*LegacyWanAnimateRequest, error) {
+	if meta == nil || meta.Input == nil {
+		return nil, fmt.Errorf("%s requires input", upstreamModel)
+	}
+	request := &LegacyWanAnimateRequest{
+		Model: upstreamModel,
+		Input: LegacyWanAnimateInput{
+			ImageURL:  meta.Input.ImageURL,
+			VideoURL:  meta.Input.VideoURL,
+			Watermark: meta.Input.Watermark,
+		},
+	}
+	mode := stringFromMap(meta.Parameters, "mode")
+	if mode != "" {
+		request.Parameters = &LegacyWanAnimateParameters{Mode: mode}
+	}
+	return request, nil
 }
 
 func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInfo) map[string]float64 {
@@ -345,19 +549,64 @@ func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInf
 		return nil
 	}
 
-	hhReq, err := a.convertToHappyHorseRequest(info, taskReq)
+	upstreamModel := getUpstreamModel(info, taskReq)
+	if isLegacyWanAnimateModel(upstreamModel) {
+		return nil
+	}
+
+	body, err := a.convertToDashScopeRequest(info, taskReq)
 	if err != nil {
 		return nil
 	}
 
-	if hhReq.Parameters.Duration == nil {
+	hhReq, ok := body.(*HappyHorseRequest)
+	if !ok || hhReq.Parameters == nil || hhReq.Parameters.Duration == nil {
 		return nil
 	}
+
 	modelName := taskReq.Model
 	if info != nil && info.OriginModelName != "" {
 		modelName = info.OriginModelName
 	}
 	return taskcommon.EstimateVideoOtherRatios(modelName, *hhReq.Parameters.Duration, hhReq.Parameters.Resolution)
+}
+
+func findSuccessfulVideoURL(resp *HappyHorseResponse) string {
+	if resp == nil {
+		return ""
+	}
+	if resp.Output.VideoURL != "" {
+		return resp.Output.VideoURL
+	}
+	if resp.Output.Results != nil {
+		return resp.Output.Results.VideoURL
+	}
+	return ""
+}
+
+func findSuccessfulDurationSeconds(resp *HappyHorseResponse) float64 {
+	if resp == nil || resp.Usage == nil {
+		return 0
+	}
+	duration := float64(resp.Usage.Duration)
+	if duration <= 0 {
+		duration = float64(resp.Usage.OutputVideoDuration)
+	}
+	if duration <= 0 {
+		duration = float64(resp.Usage.VideoDuration)
+	}
+	return duration
+}
+
+func findSuccessfulResolution(resp *HappyHorseResponse) string {
+	if resp == nil || resp.Usage == nil {
+		return ""
+	}
+	resolution := happyHorseResolutionLabelFromSR(resp.Usage.SR)
+	if resolution != "" {
+		return resolution
+	}
+	return ratio_setting.NormalizeVideoResolution(resp.Usage.VideoRatio)
 }
 
 func (a *TaskAdaptor) AdjustBillingOnComplete(task *model.Task, _ *relaycommon.TaskInfo) int {
@@ -366,15 +615,23 @@ func (a *TaskAdaptor) AdjustBillingOnComplete(task *model.Task, _ *relaycommon.T
 		return 0
 	}
 
-	duration := float64(hhResp.Usage.Duration)
-	if duration <= 0 {
-		duration = float64(hhResp.Usage.OutputVideoDuration)
-	}
+	duration := findSuccessfulDurationSeconds(&hhResp)
 	if duration <= 0 {
 		return 0
 	}
 
-	resolution := happyHorseResolutionLabelFromSR(hhResp.Usage.SR)
+	modelName := ""
+	if task != nil && task.PrivateData.BillingContext != nil {
+		modelName = task.PrivateData.BillingContext.OriginModelName
+	}
+	if modelName == "" && task != nil {
+		modelName = task.Properties.OriginModelName
+	}
+	if isLegacyWanAnimateModel(modelName) {
+		return 0
+	}
+
+	resolution := findSuccessfulResolution(&hhResp)
 	return taskcommon.CalculateVideoTaskQuota(task, duration, resolution)
 }
 
@@ -397,7 +654,7 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 	}
 
 	if hhResp.Code != "" {
-		taskErr = service.TaskErrorWrapper(fmt.Errorf("%s: %s", hhResp.Code, hhResp.Message), "happyhorse_api_error", resp.StatusCode)
+		taskErr = service.TaskErrorWrapper(fmt.Errorf("%s: %s", hhResp.Code, hhResp.Message), "alibailian_api_error", resp.StatusCode)
 		return
 	}
 	if hhResp.RequestID != "" {
@@ -491,7 +748,7 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		taskResult.Status = model.TaskStatusInProgress
 	case "SUCCEEDED":
 		taskResult.Status = model.TaskStatusSuccess
-		taskResult.Url = hhResp.Output.VideoURL
+		taskResult.Url = findSuccessfulVideoURL(&hhResp)
 	case "FAILED", "CANCELED", "UNKNOWN":
 		taskResult.Status = model.TaskStatusFailure
 		if hhResp.Message != "" {
@@ -511,7 +768,7 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
 	var hhResp HappyHorseResponse
 	if err := common.Unmarshal(task.Data, &hhResp); err != nil {
-		return nil, errors.Wrap(err, "unmarshal happyhorse response failed")
+		return nil, errors.Wrap(err, "unmarshal alibailian response failed")
 	}
 
 	openAIResp := dto.NewOpenAIVideo()
@@ -522,7 +779,7 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
 	openAIResp.CreatedAt = task.CreatedAt
 	openAIResp.CompletedAt = task.UpdatedAt
 
-	openAIResp.SetMetadata("url", hhResp.Output.VideoURL)
+	openAIResp.SetMetadata("url", findSuccessfulVideoURL(&hhResp))
 
 	if hhResp.Code != "" {
 		openAIResp.Error = &dto.OpenAIVideoError{
@@ -574,4 +831,8 @@ func convertHappyHorseStatus(status string) string {
 	default:
 		return dto.VideoStatusUnknown
 	}
+}
+
+func happyHorseResolutionLabelFromSR(sr happyHorseNumber) string {
+	return ratio_setting.NormalizeVideoResolution(strconv.FormatFloat(float64(sr), 'f', -1, 64))
 }

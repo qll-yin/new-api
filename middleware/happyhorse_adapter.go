@@ -35,12 +35,17 @@ func HappyHorseRequestConvert() func(c *gin.Context) {
 
 		var prompt string
 		var media interface{}
+		var inputData interface{}
 		if input, ok := originalReq["input"].(map[string]interface{}); ok {
 			prompt, _ = input["prompt"].(string)
 			media = input["media"]
+			inputData = input
 		}
 
 		metadata := map[string]interface{}{}
+		if inputData != nil {
+			metadata["input"] = inputData
+		}
 		if media != nil {
 			metadata["media"] = media
 		}
