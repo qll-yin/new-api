@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayhelper "github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
@@ -160,12 +161,13 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 	if strings.TrimSpace(req.Model) == "" {
 		return service.TaskErrorWrapperLocal(fmt.Errorf("model field is required"), "missing_model", http.StatusBadRequest)
 	}
+	validationModel := resolveValidationModel(c, req.Model)
 
 	meta, err := parseHappyHorseMetadata(req)
 	if err != nil {
 		return service.TaskErrorWrapperLocal(err, "invalid_request", http.StatusBadRequest)
 	}
-	if err := validateHappyHorseTaskRequest(req.Model, req.Prompt, meta); err != nil {
+	if err := validateHappyHorseTaskRequest(validationModel, req.Prompt, meta); err != nil {
 		return service.TaskErrorWrapperLocal(err, "invalid_request", http.StatusBadRequest)
 	}
 
@@ -251,6 +253,26 @@ func parseHappyHorseMetadata(req relaycommon.TaskSubmitReq) (*happyHorseRequestM
 		return nil, err
 	}
 	return meta, nil
+}
+
+func resolveValidationModel(c *gin.Context, model string) string {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return ""
+	}
+	info := &relaycommon.RelayInfo{
+		OriginModelName: model,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: model,
+		},
+	}
+	if err := relayhelper.ModelMappedHelper(c, info, nil); err != nil {
+		return model
+	}
+	if info.IsModelMapped && strings.TrimSpace(info.UpstreamModelName) != "" {
+		return info.UpstreamModelName
+	}
+	return model
 }
 
 func promptRequiredForModel(model string) bool {
