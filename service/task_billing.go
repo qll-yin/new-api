@@ -7,6 +7,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -67,6 +68,90 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	})
 	model.UpdateUserUsedQuotaAndRequestCount(info.UserId, info.PriceData.Quota)
 	model.UpdateChannelUsedQuota(info.ChannelId, info.PriceData.Quota)
+}
+
+// LogTaskCreateFailure records a single task-style error log when task creation
+// has entered the upstream submission flow but eventually fails.
+func LogTaskCreateFailure(c *gin.Context, info *relaycommon.RelayInfo, taskErr *dto.TaskError) {
+	if c == nil || info == nil || taskErr == nil || taskErr.LocalError {
+		return
+	}
+	if info.Billing == nil && !info.PriceData.FreeModel {
+		return
+	}
+
+	tokenName := c.GetString("token_name")
+	reason := taskErr.Message
+	if reason == "" && taskErr.Error != nil {
+		reason = taskErr.Error.Error()
+	}
+	if reason == "" {
+		reason = "task create failed"
+	}
+
+	other := make(map[string]interface{})
+	other["is_task"] = true
+	other["task_status"] = string(model.TaskStatusFailure)
+	other["reason"] = reason
+	if c.Request != nil && c.Request.URL != nil {
+		other["request_path"] = c.Request.URL.Path
+	}
+	if info.PublicTaskID != "" {
+		other["task_id"] = info.PublicTaskID
+	}
+	if info.Action != "" {
+		other["task_action"] = info.Action
+	}
+	if info.PriceData.ModelPrice > 0 {
+		other["model_price"] = info.PriceData.ModelPrice
+	}
+	if info.PriceData.ModelRatio > 0 {
+		other["model_ratio"] = info.PriceData.ModelRatio
+	}
+	other["group_ratio"] = info.PriceData.GroupRatioInfo.GroupRatio
+	if info.PriceData.GroupRatioInfo.HasSpecialRatio {
+		other["user_group_ratio"] = info.PriceData.GroupRatioInfo.GroupSpecialRatio
+	}
+	for key, value := range info.PriceData.OtherRatios {
+		other[key] = value
+	}
+	if info.IsModelMapped {
+		other["is_model_mapped"] = true
+		other["upstream_model_name"] = info.UpstreamModelName
+	}
+	if info.Billing != nil && info.PriceData.Quota > 0 {
+		other["pre_consumed_quota"] = info.PriceData.Quota
+		other["actual_quota"] = 0
+		other["refunded_quota"] = info.PriceData.Quota
+	}
+	if taskErr.Code != "" {
+		other["error_code"] = taskErr.Code
+	}
+	if taskErr.StatusCode > 0 {
+		other["status_code"] = taskErr.StatusCode
+	}
+
+	startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
+	useTimeSeconds := 0
+	if !startTime.IsZero() {
+		useTimeSeconds = int(info.StartTime.Sub(startTime).Seconds())
+		if useTimeSeconds < 0 {
+			useTimeSeconds = 0
+		}
+	}
+	model.RecordErrorLog(
+		c,
+		info.UserId,
+		info.ChannelId,
+		info.OriginModelName,
+		tokenName,
+		reason,
+		info.TokenId,
+		useTimeSeconds,
+		false,
+		info.UsingGroup,
+		other,
+	)
 }
 
 // ---------------------------------------------------------------------------

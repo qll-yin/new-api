@@ -604,6 +604,7 @@ func RelayTask(c *gin.Context) {
 	}
 
 	if taskErr != nil {
+		service.LogTaskCreateFailure(c, relayInfo, taskErr)
 		respondTaskError(c, taskErr)
 	}
 }
