@@ -247,6 +247,26 @@ func taskModelName(task *model.Task) string {
 	return task.Properties.OriginModelName
 }
 
+func taskLogStatus(task *model.Task) string {
+	if task == nil {
+		return ""
+	}
+	if len(task.Data) > 0 {
+		var payload map[string]interface{}
+		if err := common.Unmarshal(task.Data, &payload); err == nil {
+			if output, ok := payload["output"].(map[string]interface{}); ok {
+				if status, ok := output["task_status"].(string); ok && status != "" {
+					return status
+				}
+			}
+			if status, ok := payload["task_status"].(string); ok && status != "" {
+				return status
+			}
+		}
+	}
+	return string(task.Status)
+}
+
 func syncTaskStateLog(ctx context.Context, task *model.Task) bool {
 	if task == nil || task.PrivateData.RequestID == "" {
 		return false
@@ -267,7 +287,7 @@ func syncTaskStateLog(ctx context.Context, task *model.Task) bool {
 	}
 	other["is_task"] = true
 	other["task_id"] = task.TaskID
-	other["task_status"] = string(task.Status)
+	other["task_status"] = taskLogStatus(task)
 	if task.Progress != "" {
 		other["task_progress"] = task.Progress
 	}
@@ -336,7 +356,7 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) {
 
 	other := taskBillingOther(task)
 	other["task_id"] = task.TaskID
-	other["task_status"] = string(task.Status)
+	other["task_status"] = taskLogStatus(task)
 	other["reason"] = reason
 	other["pre_consumed_quota"] = quota
 	other["actual_quota"] = 0
@@ -399,7 +419,7 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 	}
 	other := taskBillingOther(task)
 	other["task_id"] = task.TaskID
-	other["task_status"] = string(task.Status)
+	other["task_status"] = taskLogStatus(task)
 	other["pre_consumed_quota"] = preConsumedQuota
 	other["actual_quota"] = actualQuota
 	model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
