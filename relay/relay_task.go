@@ -30,11 +30,34 @@ type TaskSubmitResult struct {
 	//PerCallPrice   types.PriceData
 }
 
-// ResolveOriginTask 处理基于已有任务的提交（remix / continuation）：
-// 查找原始任务、从中提取模型名称、将渠道锁定到原始任务的渠道
-// （通过 info.LockedChannel，重试时复用同一渠道并轮换 key），
-// 以及提取 OtherRatios（时长、分辨率）。
-// 该函数在控制器的重试循环之前调用一次，其结果通过 info 字段和上下文持久化。
+func applyTaskParamOverride(requestBody io.Reader, info *relaycommon.RelayInfo) (io.Reader, error) {
+	if info == nil || len(info.ParamOverride) == 0 {
+		return requestBody, nil
+	}
+	bodyBytes, err := io.ReadAll(requestBody)
+	if err != nil {
+		return nil, err
+	}
+	bodyBytes, err = relaycommon.ApplyParamOverrideWithRelayInfo(bodyBytes, info)
+	if err != nil {
+		return nil, err
+	}
+	return bytes.NewReader(bodyBytes), nil
+}
+
+func taskErrorFromParamOverride(err error) *dto.TaskError {
+	if fixedErr, ok := relaycommon.AsParamOverrideReturnError(err); ok {
+		return service.TaskErrorFromAPIError(relaycommon.NewAPIErrorFromParamOverride(fixedErr))
+	}
+	return service.TaskErrorWrapper(err, "channel_param_override_invalid", http.StatusBadRequest)
+}
+
+func resetTaskStatusCode(c *gin.Context, taskErr *dto.TaskError) *dto.TaskError {
+	service.ResetTaskStatusCode(taskErr, c.GetString("status_code_mapping"))
+	return taskErr
+}
+
+// ResolveOriginTask handles submissions based on an existing task.
 func ResolveOriginTask(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskError {
 	// 检测 remix action
 	path := c.Request.URL.Path
@@ -108,7 +131,7 @@ func ResolveOriginTask(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskErr
 	// 提取 remix 参数（时长、分辨率 → OtherRatios）
 	if info.Action == constant.TaskActionRemix {
 		if originTask.PrivateData.BillingContext != nil {
-			// 新的 remix 逻辑：直接从原始任务的 BillingContext 中提取 OtherRatios（如果存在）
+			// Copy billing ratios from the origin task billing context.
 			for s, f := range originTask.PrivateData.BillingContext.OtherRatios {
 				info.PriceData.AddOtherRatio(s, f)
 			}
@@ -136,11 +159,7 @@ func ResolveOriginTask(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskErr
 	return nil
 }
 
-// RelayTaskSubmit 完成 task 提交的全部流程（每次尝试调用一次）：
-// 刷新渠道元数据 → 确定 platform/adaptor → 验证请求 →
-// 估算计费(EstimateBilling) → 计算价格 → 预扣费（仅首次）→
-// 构建/发送/解析上游请求 → 提交后计费调整(AdjustBillingOnSubmit)。
-// 控制器负责 defer Refund 和成功后 Settle。
+// RelayTaskSubmit completes one task submission attempt.
 func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitResult, *dto.TaskError) {
 	info.InitChannelMeta(c)
 
@@ -176,17 +195,14 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		info.PublicTaskID = model.GenerateTaskID()
 	}
 
-	// 4. 价格计算：基础模型价格
-	info.OriginModelName = modelName
+	// Calculate base model price.
 	priceData, err := helper.ModelPriceHelperPerCall(c, info)
 	if err != nil {
 		return nil, service.TaskErrorWrapper(err, "model_price_error", http.StatusBadRequest)
 	}
 	info.PriceData = priceData
 
-	// 5. 计费估算：让适配器根据用户请求提供 OtherRatios（时长、分辨率等）
-	//    必须在 ModelPriceHelperPerCall 之后调用（它会重建 PriceData）。
-	//    ResolveOriginTask 可能已在 remix 路径中预设了 OtherRatios，此处合并。
+	// Estimate billing ratios from the parsed task request.
 	if estimatedRatios := adaptor.EstimateBilling(c, info); len(estimatedRatios) > 0 {
 		for k, v := range estimatedRatios {
 			info.PriceData.AddOtherRatio(k, v)
@@ -202,7 +218,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		}
 	}
 
-	// 7. 预扣费（仅首次 — 重试时 info.Billing 已存在，跳过）
+	// Pre-consume quota only for the first attempt.
 	if info.Billing == nil && !info.PriceData.FreeModel {
 		info.ForcePreConsume = true
 		if apiErr := service.PreConsumeBilling(c, info.PriceData.Quota, info); apiErr != nil {
@@ -215,6 +231,10 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	if err != nil {
 		return nil, service.TaskErrorWrapper(err, "build_request_failed", http.StatusInternalServerError)
 	}
+	requestBody, err = applyTaskParamOverride(requestBody, info)
+	if err != nil {
+		return nil, taskErrorFromParamOverride(err)
+	}
 
 	// 9. 发送请求
 	resp, err := adaptor.DoRequest(c, info, requestBody)
@@ -223,10 +243,10 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	}
 	if resp != nil && resp.StatusCode != http.StatusOK {
 		responseBody, _ := io.ReadAll(resp.Body)
-		return nil, service.TaskErrorWrapper(fmt.Errorf("%s", string(responseBody)), "fail_to_fetch_task", resp.StatusCode)
+		return nil, resetTaskStatusCode(c, service.TaskErrorWrapper(fmt.Errorf("%s", string(responseBody)), "fail_to_fetch_task", resp.StatusCode))
 	}
 
-	// 10. 返回 OtherRatios 给下游（header 必须在 DoResponse 写 body 之前设置）
+	// Return billing ratios before writing the response body.
 	otherRatios := info.PriceData.OtherRatios
 	if otherRatios == nil {
 		otherRatios = map[string]float64{}
@@ -237,7 +257,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	// 11. 解析响应
 	upstreamTaskID, taskData, taskErr := adaptor.DoResponse(c, resp, info)
 	if taskErr != nil {
-		return nil, taskErr
+		return nil, resetTaskStatusCode(c, taskErr)
 	}
 
 	// 11. 提交后计费调整：让适配器根据上游实际返回调整 OtherRatios
@@ -435,9 +455,7 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 	return
 }
 
-// tryRealtimeFetch 尝试从上游实时拉取 Gemini/Vertex 任务状态。
-// 仅当渠道类型为 Gemini 或 Vertex 时触发；其他渠道或出错时返回 nil。
-// 当非 OpenAI Video API 时，还会构建自定义格式的响应体。
+// tryRealtimeFetch attempts to refresh Gemini/Vertex task status from upstream.
 func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 	channelModel, err := model.GetChannelById(task.ChannelId, true)
 	if err != nil {
@@ -485,11 +503,11 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 		task.Progress = ti.Progress
 	}
 	if strings.HasPrefix(ti.Url, "data:") {
-		// data: URI — kept in Data, not ResultURL
+		// data: URI is kept in Data, not ResultURL.
 	} else if ti.Url != "" {
 		task.PrivateData.ResultURL = ti.Url
 	} else if task.Status == model.TaskStatusSuccess {
-		// No URL from adaptor — construct proxy URL using public task ID
+		// No URL from adaptor, construct proxy URL using public task ID.
 		task.PrivateData.ResultURL = taskcommon.BuildProxyURL(task.TaskID)
 	}
 

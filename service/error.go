@@ -155,6 +155,30 @@ func ResetStatusCode(newApiErr *types.NewAPIError, statusCodeMappingStr string) 
 	}
 }
 
+func ResetTaskStatusCode(taskErr *dto.TaskError, statusCodeMappingStr string) {
+	if taskErr == nil {
+		return
+	}
+	if statusCodeMappingStr == "" || statusCodeMappingStr == "{}" {
+		return
+	}
+	if taskErr.StatusCode == http.StatusOK {
+		return
+	}
+	statusCodeMapping := make(map[string]any)
+	err := common.Unmarshal([]byte(statusCodeMappingStr), &statusCodeMapping)
+	if err != nil {
+		return
+	}
+	codeStr := strconv.Itoa(taskErr.StatusCode)
+	if value, ok := statusCodeMapping[codeStr]; ok {
+		intCode, ok := parseStatusCodeMappingValue(value)
+		if !ok {
+			return
+		}
+		taskErr.StatusCode = intCode
+	}
+}
 func parseStatusCodeMappingValue(value any) (int, bool) {
 	switch v := value.(type) {
 	case string:
