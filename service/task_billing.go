@@ -52,6 +52,12 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	if info.PriceData.GroupRatioInfo.HasSpecialRatio {
 		other["user_group_ratio"] = info.PriceData.GroupRatioInfo.GroupSpecialRatio
 	}
+	if len(info.PriceData.OtherRatios) > 0 {
+		other["other_ratios"] = info.PriceData.OtherRatios
+	}
+	for key, value := range info.PriceData.OtherRatios {
+		other[key] = value
+	}
 	if info.IsModelMapped {
 		other["is_model_mapped"] = true
 		other["upstream_model_name"] = info.UpstreamModelName
@@ -111,6 +117,9 @@ func LogTaskCreateFailure(c *gin.Context, info *relaycommon.RelayInfo, taskErr *
 	other["group_ratio"] = info.PriceData.GroupRatioInfo.GroupRatio
 	if info.PriceData.GroupRatioInfo.HasSpecialRatio {
 		other["user_group_ratio"] = info.PriceData.GroupRatioInfo.GroupSpecialRatio
+	}
+	if len(info.PriceData.OtherRatios) > 0 {
+		other["other_ratios"] = info.PriceData.OtherRatios
 	}
 	for key, value := range info.PriceData.OtherRatios {
 		other[key] = value

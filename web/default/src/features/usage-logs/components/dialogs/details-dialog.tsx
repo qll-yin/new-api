@@ -142,6 +142,15 @@ function formatRatio(ratio: number | undefined): string {
   return ratio.toFixed(4)
 }
 
+function getBillingParameterRows(other: LogOtherData): string[] {
+  const ratios = other.other_ratios
+  if (!ratios || typeof ratios !== 'object') return []
+
+  return Object.entries(ratios)
+    .filter(([, value]) => Number.isFinite(value) && value !== 1)
+    .map(([key, value]) => `${key}: ${formatRatio(value)}x`)
+}
+
 function BillingBreakdown(props: {
   log: UsageLog
   other: LogOtherData
@@ -214,6 +223,14 @@ function BillingBreakdown(props: {
     rows.push({
       label: isUserGR ? t('User Exclusive Ratio') : t('Group Ratio'),
       value: `${formatRatio(effectiveGR)}x`,
+    })
+  }
+
+  const billingParameters = getBillingParameterRows(other)
+  if (billingParameters.length > 0) {
+    rows.push({
+      label: t('Parameters'),
+      value: billingParameters.join(', '),
     })
   }
 

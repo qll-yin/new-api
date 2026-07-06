@@ -1286,6 +1286,30 @@ function renderBillingArticle(lines, { showReferenceNote = true } = {}) {
   );
 }
 
+function getBillingOtherRatioEntries(otherRatios) {
+  if (!otherRatios || typeof otherRatios !== 'object') return [];
+  return Object.entries(otherRatios)
+      .filter(([, value]) => Number.isFinite(Number(value)) && Number(value) > 0 && Number(value) !== 1)
+      .map(([key, value]) => [key, Number(value)]);
+}
+
+function formatBillingOtherRatios(otherRatios) {
+  return getBillingOtherRatioEntries(otherRatios)
+      .map(([key, value]) => key + ': ' + value.toFixed(2))
+      .join(', ');
+}
+
+function multiplyBillingOtherRatios(otherRatios) {
+  return getBillingOtherRatioEntries(otherRatios)
+      .reduce((product, [, value]) => product * value, 1);
+}
+
+function formatBillingOtherRatioFormula(otherRatios) {
+  const entries = getBillingOtherRatioEntries(otherRatios);
+  if (entries.length === 0) return '';
+  return entries.map(([key, value]) => key + ' ' + value.toFixed(2)).join(' * ');
+}
+
 // Shared core for simple price rendering (used by OpenAI-like and Claude-like variants)
 function renderPriceSimpleCore({
                                  modelRatio,
@@ -1648,6 +1672,7 @@ export function renderModelPrice(opts) {
     audio_input_price: audioInputPrice = 0,
     image_generation_call: imageGenerationCall = false,
     image_generation_call_price: imageGenerationCallPrice = 0,
+    other_ratios: otherRatios,
     displayMode = 'price',
   } = opts;
   const { ratio: effectiveGroupRatio, label: ratioLabel } = getEffectiveRatio(
@@ -1661,14 +1686,23 @@ export function renderModelPrice(opts) {
 
   if (!shouldUseRatioBillingProcess(modelPrice)) {
     if (modelPrice !== -1) {
+      const otherRatioText = formatBillingOtherRatios(otherRatios);
+      const otherRatioFormula = formatBillingOtherRatioFormula(otherRatios);
+      const otherRatioProduct = multiplyBillingOtherRatios(otherRatios);
+      const totalUsd = modelPrice * otherRatioProduct * groupRatio;
+      const finalFormula = otherRatioFormula
+          ? '按次 {{symbol}}{{price}} * ' + otherRatioFormula + ' * {{ratioType}} {{ratio}} = {{symbol}}{{total}}'
+          : '按次 {{symbol}}{{price}} * {{ratioType}} {{ratio}} = {{symbol}}{{total}}';
+
       return renderBillingArticle([
         buildBillingPriceText('按次：{{symbol}}{{price}}', {
           symbol,
           usdAmount: modelPrice,
           rate,
         }),
+        otherRatioText ? i18next.t('\u53c2\u6570') + ': ' + otherRatioText : null,
         buildBillingPriceText(
-            '按次 {{symbol}}{{price}} * {{ratioType}} {{ratio}} = {{symbol}}{{total}}',
+            finalFormula,
             {
               symbol,
               usdAmount: modelPrice,
@@ -1676,7 +1710,7 @@ export function renderModelPrice(opts) {
               ratioType: ratioLabel,
               ratio: groupRatio,
               amountKey: 'price',
-              total: formatBillingDisplayPrice(modelPrice * groupRatio, rate),
+              total: formatBillingDisplayPrice(totalUsd, rate),
             },
         ),
       ]);
