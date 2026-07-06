@@ -31,7 +31,7 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 			var contents []string
 			for key, ra := range info.PriceData.OtherRatios {
 				if 1.0 != ra {
-					contents = append(contents, fmt.Sprintf("%s: %.2f", key, ra))
+					contents = append(contents, fmt.Sprintf("%s: %.6f", key, ra))
 				}
 			}
 			if len(contents) > 0 {
