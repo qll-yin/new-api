@@ -31,6 +31,12 @@ type TaskPollingAdaptor interface {
 	AdjustBillingOnComplete(task *model.Task, taskResult *relaycommon.TaskInfo) int
 }
 
+// PerCallCompletionBillingAdjuster is an optional opt-in for adaptors whose
+// fixed-price task still needs final usage settlement, such as video seconds/SR.
+type PerCallCompletionBillingAdjuster interface {
+	AllowPerCallBillingAdjustment(task *model.Task, taskResult *relaycommon.TaskInfo) bool
+}
+
 // GetTaskAdaptorFunc 由 main 包注入，用于获取指定平台的任务适配器。
 // 打破 service -> relay -> relay/channel -> service 的循环依赖。
 var GetTaskAdaptorFunc func(platform constant.TaskPlatform) TaskPollingAdaptor
@@ -582,20 +588,36 @@ func truncateBase64(s string) string {
 //  2. taskResult.TotalTokens > 0 → 按 token 重算
 //  3. 都不满足 → 保持预扣额度不变
 func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor, task *model.Task, taskResult *relaycommon.TaskInfo) {
-	// 0. 按次计费的任务不做差额结算
+	perCallBilling := false
 	if bc := task.PrivateData.BillingContext; bc != nil && bc.PerCallBilling {
-		logger.LogInfo(ctx, fmt.Sprintf("任务 %s 按次计费，跳过差额结算", task.TaskID))
+		perCallBilling = true
+	}
+
+	allowAdaptorAdjust := !perCallBilling
+	if perCallBilling {
+		if optIn, ok := adaptor.(PerCallCompletionBillingAdjuster); ok {
+			allowAdaptorAdjust = optIn.AllowPerCallBillingAdjustment(task, taskResult)
+		}
+	}
+
+	// 1. 优先让 adaptor 根据上游 usage 决定最终额度。
+	// 按次计费默认不进入这里；只有适配器显式声明需要完成后 usage 结算时才允许。
+	if allowAdaptorAdjust {
+		if actualQuota := adaptor.AdjustBillingOnComplete(task, taskResult); actualQuota > 0 {
+			RecalculateTaskQuota(ctx, task, actualQuota, "adaptor计费调整")
+			return
+		}
+	}
+
+	// 2. 纯按次计费任务不做 token 回退重算。
+	if perCallBilling {
+		logger.LogInfo(ctx, fmt.Sprintf("任务 %s 按次计费，跳过token差额结算", task.TaskID))
 		return
 	}
-	// 1. 优先让 adaptor 决定最终额度
-	if actualQuota := adaptor.AdjustBillingOnComplete(task, taskResult); actualQuota > 0 {
-		RecalculateTaskQuota(ctx, task, actualQuota, "adaptor计费调整")
-		return
-	}
-	// 2. 回退到 token 重算
+	// 3. 回退到 token 重算
 	if taskResult.TotalTokens > 0 {
 		RecalculateTaskQuotaByTokens(ctx, task, taskResult.TotalTokens)
 		return
 	}
-	// 3. 无调整，保持预扣额度
+	// 4. 无调整，保持预扣额度
 }

@@ -80,16 +80,16 @@ type HappyHorseResponse struct {
 }
 
 type HappyHorseOutput struct {
-	TaskID        string                     `json:"task_id"`
-	TaskStatus    string                     `json:"task_status"`
-	SubmitTime    string                     `json:"submit_time,omitempty"`
-	ScheduledTime string                     `json:"scheduled_time,omitempty"`
-	EndTime       string                     `json:"end_time,omitempty"`
-	OrigPrompt    string                     `json:"orig_prompt,omitempty"`
-	VideoURL      string                     `json:"video_url,omitempty"`
-	Results       *LegacyWanAnimateResults   `json:"results,omitempty"`
-	Code          string                     `json:"code,omitempty"`
-	Message       string                     `json:"message,omitempty"`
+	TaskID        string                   `json:"task_id"`
+	TaskStatus    string                   `json:"task_status"`
+	SubmitTime    string                   `json:"submit_time,omitempty"`
+	ScheduledTime string                   `json:"scheduled_time,omitempty"`
+	EndTime       string                   `json:"end_time,omitempty"`
+	OrigPrompt    string                   `json:"orig_prompt,omitempty"`
+	VideoURL      string                   `json:"video_url,omitempty"`
+	Results       *LegacyWanAnimateResults `json:"results,omitempty"`
+	Code          string                   `json:"code,omitempty"`
+	Message       string                   `json:"message,omitempty"`
 }
 
 type LegacyWanAnimateResults struct {
@@ -631,6 +631,9 @@ func findSuccessfulResolution(resp *HappyHorseResponse) string {
 	return ratio_setting.NormalizeVideoResolution(resp.Usage.VideoRatio)
 }
 
+func (a *TaskAdaptor) AllowPerCallBillingAdjustment(_ *model.Task, _ *relaycommon.TaskInfo) bool {
+	return true
+}
 func (a *TaskAdaptor) AdjustBillingOnComplete(task *model.Task, _ *relaycommon.TaskInfo) int {
 	var hhResp HappyHorseResponse
 	if err := common.Unmarshal(task.Data, &hhResp); err != nil || hhResp.Usage == nil {
@@ -649,10 +652,6 @@ func (a *TaskAdaptor) AdjustBillingOnComplete(task *model.Task, _ *relaycommon.T
 	if modelName == "" && task != nil {
 		modelName = task.Properties.OriginModelName
 	}
-	if isLegacyWanAnimateModel(modelName) {
-		return 0
-	}
-
 	resolution := findSuccessfulResolution(&hhResp)
 	return taskcommon.CalculateVideoTaskQuota(task, duration, resolution)
 }
