@@ -705,8 +705,10 @@ func (t *TaskSubmitReq) HasImage() bool {
 func (t *TaskSubmitReq) UnmarshalJSON(data []byte) error {
 	type Alias TaskSubmitReq
 	aux := &struct {
-		Metadata json.RawMessage `json:"metadata,omitempty"`
-		Duration json.RawMessage `json:"duration,omitempty"`
+		Metadata   json.RawMessage `json:"metadata,omitempty"`
+		Duration   json.RawMessage `json:"duration,omitempty"`
+		Input      json.RawMessage `json:"input,omitempty"`
+		Parameters json.RawMessage `json:"parameters,omitempty"`
 		*Alias
 	}{
 		Alias: (*Alias)(t),
@@ -736,14 +738,66 @@ func (t *TaskSubmitReq) UnmarshalJSON(data []byte) error {
 			var metadataObj map[string]interface{}
 			if err := common.Unmarshal([]byte(metadataStr), &metadataObj); err == nil {
 				t.Metadata = metadataObj
-				return nil
+			}
+		} else {
+			var metadataObj map[string]interface{}
+			if err := common.Unmarshal(aux.Metadata, &metadataObj); err == nil {
+				t.Metadata = metadataObj
 			}
 		}
+	}
 
-		var metadataObj map[string]interface{}
-		if err := common.Unmarshal(aux.Metadata, &metadataObj); err == nil {
-			t.Metadata = metadataObj
+	if t.Metadata == nil {
+		t.Metadata = map[string]interface{}{}
+	}
+
+	if len(aux.Input) > 0 {
+		var inputObj map[string]interface{}
+		if err := common.Unmarshal(aux.Input, &inputObj); err == nil && len(inputObj) > 0 {
+			if strings.TrimSpace(t.Prompt) == "" {
+				if prompt, ok := inputObj["prompt"].(string); ok {
+					t.Prompt = prompt
+				}
+			}
+			if _, exists := t.Metadata["input"]; !exists {
+				t.Metadata["input"] = inputObj
+			}
+			if media, exists := inputObj["media"]; exists {
+				if _, hasMedia := t.Metadata["media"]; !hasMedia {
+					t.Metadata["media"] = media
+				}
+			}
 		}
+	}
+
+	if len(aux.Parameters) > 0 {
+		var paramsObj map[string]interface{}
+		if err := common.Unmarshal(aux.Parameters, &paramsObj); err == nil && len(paramsObj) > 0 {
+			if _, exists := t.Metadata["parameters"]; !exists {
+				t.Metadata["parameters"] = paramsObj
+			}
+			if t.Duration == 0 {
+				if rawDuration, exists := paramsObj["duration"]; exists {
+					switch v := rawDuration.(type) {
+					case float64:
+						t.Duration = int(v)
+					case string:
+						if parsed, err := strconv.Atoi(v); err == nil {
+							t.Duration = parsed
+						}
+					}
+				}
+			}
+			if t.Size == "" {
+				if resolution, ok := paramsObj["resolution"].(string); ok {
+					t.Size = resolution
+				}
+			}
+		}
+	}
+
+	if len(t.Metadata) == 0 {
+		t.Metadata = nil
 	}
 
 	return nil
