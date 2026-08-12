@@ -10,6 +10,22 @@ import (
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 )
 
+func FindVideoResolutionMultiplier(otherRatios map[string]float64) float64 {
+	for key, value := range otherRatios {
+		if strings.HasPrefix(key, "resolution-") && value > 0 {
+			return value
+		}
+	}
+	return 1
+}
+
+func ResolveVideoModelPrice(modelPrice float64, otherRatios map[string]float64) float64 {
+	if modelPrice <= 0 {
+		return 0
+	}
+	return modelPrice * FindVideoResolutionMultiplier(otherRatios)
+}
+
 func resolveVideoModelName(task *model.Task) string {
 	if task == nil {
 		return ""
@@ -57,46 +73,45 @@ func CalculateVideoTaskQuota(task *model.Task, durationSeconds float64, resoluti
 	}
 
 	billingContext := task.PrivateData.BillingContext
-	if billingContext.ModelPrice <= 0 {
+	resolvedUnitPrice := billingContext.ResolvedModelPrice
+	if resolvedUnitPrice <= 0 && billingContext.ModelPrice <= 0 {
 		return 0
 	}
 
 	modelName := resolveVideoModelName(task)
-	if modelName == "" {
-		multiplier := 1.0
-		if resolutionKey := FindVideoResolutionFromOtherRatios(billingContext.OtherRatios); resolutionKey != "" {
-			if v, ok := billingContext.OtherRatios[fmt.Sprintf("resolution-%s", resolutionKey)]; ok && v > 0 {
-				multiplier = v
-			}
-		}
-		groupRatio := billingContext.GroupRatio
-		if groupRatio <= 0 {
-			groupRatio = 1
-		}
-		cost := billingContext.ModelPrice * durationSeconds * multiplier
-		return billingexpr.QuotaRound(cost * common.QuotaPerUnit * groupRatio)
-	}
-	multiplier, normalizedResolution, ok := ratio_setting.GetVideoResolutionMultiplier(
-		modelName,
-		resolution,
-	)
-	if !ok {
-		normalizedResolution = FindVideoResolutionFromOtherRatios(billingContext.OtherRatios)
-		if normalizedResolution != "" {
-			if v, exists := billingContext.OtherRatios[fmt.Sprintf("resolution-%s", normalizedResolution)]; exists && v > 0 {
-				multiplier = v
-				ok = true
-			}
-		}
-		if !ok {
-			multiplier, normalizedResolution, ok = ratio_setting.GetVideoResolutionMultiplier(
+	if resolvedUnitPrice <= 0 {
+		if modelName == "" {
+			resolvedUnitPrice = ResolveVideoModelPrice(billingContext.ModelPrice, billingContext.OtherRatios)
+		} else {
+			multiplier, normalizedResolution, ok := ratio_setting.GetVideoResolutionMultiplier(
 				modelName,
-				normalizedResolution,
+				resolution,
 			)
 			if !ok {
-				return 0
+				normalizedResolution = FindVideoResolutionFromOtherRatios(billingContext.OtherRatios)
+				if normalizedResolution != "" {
+					if v, exists := billingContext.OtherRatios[fmt.Sprintf("resolution-%s", normalizedResolution)]; exists && v > 0 {
+						multiplier = v
+						ok = true
+					}
+				}
+				if !ok {
+					multiplier, normalizedResolution, ok = ratio_setting.GetVideoResolutionMultiplier(
+						modelName,
+						normalizedResolution,
+					)
+					if !ok {
+						resolvedUnitPrice = ResolveVideoModelPrice(billingContext.ModelPrice, billingContext.OtherRatios)
+					}
+				}
+			}
+			if resolvedUnitPrice <= 0 && multiplier > 0 {
+				resolvedUnitPrice = billingContext.ModelPrice * multiplier
 			}
 		}
+	}
+	if resolvedUnitPrice <= 0 {
+		return 0
 	}
 
 	groupRatio := billingContext.GroupRatio
@@ -104,9 +119,6 @@ func CalculateVideoTaskQuota(task *model.Task, durationSeconds float64, resoluti
 		groupRatio = 1
 	}
 
-	cost := billingContext.ModelPrice * durationSeconds * multiplier
-	if normalizedResolution == "" {
-		cost = billingContext.ModelPrice * durationSeconds
-	}
+	cost := resolvedUnitPrice * durationSeconds
 	return billingexpr.QuotaRound(cost * common.QuotaPerUnit * groupRatio)
 }

@@ -31,6 +31,16 @@ type TaskSubmitResult struct {
 	//PerCallPrice   types.PriceData
 }
 
+func resolveTaskUnitPrice(modelPrice float64, ratios map[string]float64) float64 {
+	if modelPrice <= 0 {
+		return 0
+	}
+	if len(ratios) == 0 {
+		return modelPrice
+	}
+	return taskcommon.ResolveVideoModelPrice(modelPrice, ratios)
+}
+
 func applyTaskParamOverride(requestBody io.Reader, info *relaycommon.RelayInfo) (io.Reader, error) {
 	if info == nil || len(info.ParamOverride) == 0 {
 		return requestBody, nil
@@ -214,6 +224,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	if !common.StringsContains(constant.TaskPricePatches, modelName) {
 		info.PriceData.Quota = applyTaskOtherRatiosToQuota(info.PriceData.Quota, info.PriceData.OtherRatios)
 	}
+	info.PriceData.ResolvedModelPrice = resolveTaskUnitPrice(info.PriceData.ModelPrice, info.PriceData.OtherRatios)
 
 	// Pre-consume quota only for the first attempt.
 	if info.Billing == nil && !info.PriceData.FreeModel {
@@ -264,6 +275,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		finalQuota = recalcQuotaFromRatios(info, adjustedRatios)
 		info.PriceData.OtherRatios = adjustedRatios
 		info.PriceData.Quota = finalQuota
+		info.PriceData.ResolvedModelPrice = resolveTaskUnitPrice(info.PriceData.ModelPrice, adjustedRatios)
 	}
 
 	return &TaskSubmitResult{

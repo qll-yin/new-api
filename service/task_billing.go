@@ -10,10 +10,18 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 )
+
+func effectiveTaskModelPrice(modelPrice float64, resolvedModelPrice float64, otherRatios map[string]float64) float64 {
+	if resolvedModelPrice > 0 {
+		return resolvedModelPrice
+	}
+	return taskcommon.ResolveVideoModelPrice(modelPrice, otherRatios)
+}
 
 // LogTaskConsumption 记录任务消费日志和统计信息（仅记录，不涉及实际扣费）。
 // 实际扣费已由 BillingSession（PreConsumeBilling + SettleBilling）完成。
@@ -44,7 +52,7 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	other["task_id"] = info.PublicTaskID
 	other["task_status"] = string(model.TaskStatusSubmitted)
 	other["request_path"] = c.Request.URL.Path
-	other["model_price"] = info.PriceData.ModelPrice
+	other["model_price"] = effectiveTaskModelPrice(info.PriceData.ModelPrice, info.PriceData.ResolvedModelPrice, info.PriceData.OtherRatios)
 	if info.PriceData.ModelRatio > 0 {
 		other["model_ratio"] = info.PriceData.ModelRatio
 	}
@@ -108,8 +116,8 @@ func LogTaskCreateFailure(c *gin.Context, info *relaycommon.RelayInfo, taskErr *
 	if info.Action != "" {
 		other["task_action"] = info.Action
 	}
-	if info.PriceData.ModelPrice > 0 {
-		other["model_price"] = info.PriceData.ModelPrice
+	if resolvedPrice := effectiveTaskModelPrice(info.PriceData.ModelPrice, info.PriceData.ResolvedModelPrice, info.PriceData.OtherRatios); resolvedPrice > 0 {
+		other["model_price"] = resolvedPrice
 	}
 	if info.PriceData.ModelRatio > 0 {
 		other["model_ratio"] = info.PriceData.ModelRatio
@@ -219,7 +227,7 @@ func taskAdjustTokenQuota(ctx context.Context, task *model.Task, delta int) {
 func taskBillingOther(task *model.Task) map[string]interface{} {
 	other := make(map[string]interface{})
 	if bc := task.PrivateData.BillingContext; bc != nil {
-		other["model_price"] = bc.ModelPrice
+		other["model_price"] = effectiveTaskModelPrice(bc.ModelPrice, bc.ResolvedModelPrice, bc.OtherRatios)
 		if bc.ModelRatio > 0 {
 			other["model_ratio"] = bc.ModelRatio
 		}
@@ -483,19 +491,9 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 		finalGroupRatio = groupRatio
 	}
 
-	// 计算 OtherRatios 乘积（视频折扣、时长等）
-	otherMultiplier := 1.0
-	if bc := task.PrivateData.BillingContext; bc != nil {
-		for _, r := range bc.OtherRatios {
-			if r != 1.0 && r > 0 {
-				otherMultiplier *= r
-			}
-		}
-	}
+	// 纯 token 差额结算不再叠乘视频分辨率/秒数参数，避免与按次视频单价重复计费。
+	actualQuota := int(float64(totalTokens) * modelRatio * finalGroupRatio)
 
-	// 计算实际应扣费额度: totalTokens * modelRatio * groupRatio * otherMultiplier
-	actualQuota := int(float64(totalTokens) * modelRatio * finalGroupRatio * otherMultiplier)
-
-	reason := fmt.Sprintf("token重算：tokens=%d, modelRatio=%.2f, groupRatio=%.2f, otherMultiplier=%.4f", totalTokens, modelRatio, finalGroupRatio, otherMultiplier)
+	reason := fmt.Sprintf("token重算：tokens=%d, modelRatio=%.2f, groupRatio=%.2f", totalTokens, modelRatio, finalGroupRatio)
 	RecalculateTaskQuota(ctx, task, actualQuota, reason)
 }
