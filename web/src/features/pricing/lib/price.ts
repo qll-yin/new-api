@@ -20,7 +20,11 @@ import { formatCurrencyFromUSD } from '@/lib/currency'
 
 import { QUOTA_TYPE_VALUES, TOKEN_UNIT_DIVISORS } from '../constants'
 import type { PricingModel, TokenUnit, PriceType } from '../types'
-import { getConfiguredGroupRatio, getDisplayGroupRatio } from './model-helpers'
+import {
+  getConfiguredGroupRatio,
+  getDisplayGroupRatio,
+  getVideoPricingConfig,
+} from './model-helpers'
 
 // ----------------------------------------------------------------------------
 // Price Calculation Utilities
@@ -257,6 +261,74 @@ export function formatRequestPrice(
 
   let priceInUSD = (model.model_price || 0) * displayGroupRatio
 
+  priceInUSD = applyRechargeRate(
+    priceInUSD,
+    showWithRecharge,
+    priceRate,
+    usdExchangeRate
+  )
+
+  return formatCurrencyFromUSD(priceInUSD, {
+    digitsLarge: 4,
+    digitsSmall: 4,
+    abbreviate: false,
+  })
+}
+
+function getVideoResolutionPriceInUSD(
+  model: PricingModel,
+  resolution: string,
+  groupRatio: number
+): number {
+  const videoConfig = getVideoPricingConfig(model)
+  if (!videoConfig) return Number.NaN
+
+  const basePrice = model.model_price || 0
+  const baseResolution = videoConfig.base_resolution || ''
+  const normalizedResolution = resolution.trim().toUpperCase()
+  const multiplier =
+    normalizedResolution && normalizedResolution !== baseResolution
+      ? Number(videoConfig.resolution_multipliers?.[normalizedResolution] ?? 1)
+      : 1
+
+  return basePrice * multiplier * groupRatio
+}
+
+export function formatVideoPrice(
+  model: PricingModel,
+  resolution: string,
+  showWithRecharge = false,
+  priceRate = 1,
+  usdExchangeRate = 1,
+  selectedGroup?: string
+): string {
+  const groupRatio = getDisplayGroupRatio(model, selectedGroup)
+  let priceInUSD = getVideoResolutionPriceInUSD(model, resolution, groupRatio)
+  priceInUSD = applyRechargeRate(
+    priceInUSD,
+    showWithRecharge,
+    priceRate,
+    usdExchangeRate
+  )
+
+  return formatCurrencyFromUSD(priceInUSD, {
+    digitsLarge: 4,
+    digitsSmall: 4,
+    abbreviate: false,
+  })
+}
+
+export function formatFixedVideoPrice(
+  model: PricingModel,
+  group: string,
+  resolution: string,
+  showWithRecharge = false,
+  priceRate = 1,
+  usdExchangeRate = 1,
+  groupRatio: Record<string, number>
+): string {
+  const ratio = getConfiguredGroupRatio(groupRatio, group)
+  let priceInUSD = getVideoResolutionPriceInUSD(model, resolution, ratio)
   priceInUSD = applyRechargeRate(
     priceInUSD,
     showWithRecharge,

@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { EXCLUDED_GROUPS, FILTER_ALL, QUOTA_TYPE_VALUES } from '../constants'
-import type { PricingModel } from '../types'
+import type { PricingModel, PricingVideoModelConfig } from '../types'
 
 // ----------------------------------------------------------------------------
 // Model Helper Utilities
@@ -106,4 +106,72 @@ export function replaceModelInPath(path: string, modelName: string): string {
  */
 export function isTokenBasedModel(model: PricingModel): boolean {
   return model.quota_type === QUOTA_TYPE_VALUES.TOKEN
+}
+
+export function isVideoPricingModel(model: PricingModel): boolean {
+  return model.billing_mode === 'video' && Boolean(model.video_model_config)
+}
+
+export function normalizeVideoResolution(value?: string): string {
+  const normalized = String(value || '')
+    .trim()
+    .toUpperCase()
+  if (!normalized) return ''
+  if (normalized === '480' || normalized === '720' || normalized === '1080') {
+    return `${normalized}P`
+  }
+  return normalized
+}
+
+export function getVideoPricingConfig(
+  model: PricingModel
+): PricingVideoModelConfig | null {
+  if (!isVideoPricingModel(model)) return null
+
+  const rawConfig = model.video_model_config
+  if (!rawConfig) return null
+
+  const baseResolution = normalizeVideoResolution(rawConfig.base_resolution)
+  const nextMultipliers = Object.fromEntries(
+    Object.entries(rawConfig.resolution_multipliers || {})
+      .map(([resolution, multiplier]) => [
+        normalizeVideoResolution(resolution),
+        Number(multiplier),
+      ])
+      .filter(
+        ([resolution, multiplier]) =>
+          Boolean(resolution) &&
+          Number.isFinite(Number(multiplier)) &&
+          Number(multiplier) > 0
+      )
+  ) as Record<string, number>
+
+  return {
+    base_resolution: baseResolution || undefined,
+    resolution_multipliers:
+      Object.keys(nextMultipliers).length > 0 ? nextMultipliers : undefined,
+  }
+}
+
+export function getVideoPricingResolutions(model: PricingModel): string[] {
+  const videoConfig = getVideoPricingConfig(model)
+  if (!videoConfig) return []
+
+  const resolutions = new Set<string>()
+  if (videoConfig.base_resolution) {
+    resolutions.add(videoConfig.base_resolution)
+  }
+  for (const resolution of Object.keys(videoConfig.resolution_multipliers || {})) {
+    if (resolution) {
+      resolutions.add(resolution)
+    }
+  }
+
+  return ['480P', '720P', '1080P']
+    .filter((resolution) => resolutions.has(resolution))
+    .concat(
+      [...resolutions].filter(
+        (resolution) => !['480P', '720P', '1080P'].includes(resolution)
+      )
+    )
 }

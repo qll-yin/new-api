@@ -27,6 +27,11 @@ export type PricingVendor = {
   description?: string
 }
 
+export type PricingVideoModelConfig = {
+  base_resolution?: string
+  resolution_multipliers?: Record<string, number>
+}
+
 export type PricingModel = {
   id: number
   model_name: string
@@ -56,6 +61,8 @@ export type PricingModel = {
   billing_expr?: string
   /** Pricing version returned by backend, useful for cache busting */
   pricing_version?: string
+  /** Video pricing config returned by backend for per-second video billing */
+  video_model_config?: PricingVideoModelConfig
   /**
    * Optional model metadata fields reserved for backend-provided catalog data.
    * Keep them data-driven; do not synthesize display values on the client.

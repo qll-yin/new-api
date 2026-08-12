@@ -34,10 +34,16 @@ import {
   getDynamicPricingSummary,
 } from '../lib/dynamic-price'
 import { parseTags } from '../lib/filters'
-import { isTokenBasedModel } from '../lib/model-helpers'
+import {
+  getVideoPricingConfig,
+  getVideoPricingResolutions,
+  isTokenBasedModel,
+  isVideoPricingModel,
+} from '../lib/model-helpers'
 import {
   formatPrice,
   formatRequestPrice,
+  formatVideoPrice,
   stripTrailingZeros,
 } from '../lib/price'
 import type { PricingModel, TokenUnit } from '../types'
@@ -175,6 +181,7 @@ export function usePricingColumns(
         }
 
         const isTokenBased = isTokenBasedModel(model)
+        const isVideoPricing = isVideoPricingModel(model)
 
         if (isTokenBased) {
           const inputPrice = stripTrailingZeros(
@@ -209,6 +216,44 @@ export function usePricingColumns(
               </span>
               <div className='text-muted-foreground/50 text-[10px]'>
                 / {tokenUnitLabel} tokens
+              </div>
+            </div>
+          )
+        }
+
+        if (isVideoPricing) {
+          const videoConfig = getVideoPricingConfig(model)
+          const resolutions = getVideoPricingResolutions(model)
+          const displayResolutions =
+            resolutions.length > 0
+              ? resolutions
+              : videoConfig?.base_resolution
+                ? [videoConfig.base_resolution]
+                : []
+
+          return (
+            <div className='max-w-full min-w-0'>
+              <span className='font-mono text-sm tabular-nums'>
+                {displayResolutions.slice(0, 2).map((resolution, index) => (
+                  <span key={resolution}>
+                    {index > 0 && (
+                      <span className='text-muted-foreground/40 mx-1'>/</span>
+                    )}
+                    {resolution} {stripTrailingZeros(
+                      formatVideoPrice(
+                        model,
+                        resolution,
+                        showRechargePrice,
+                        priceRate,
+                        usdExchangeRate,
+                        selectedGroup
+                      )
+                    )}
+                  </span>
+                ))}
+              </span>
+              <div className='text-muted-foreground/50 text-[10px]'>
+                / {t('second')}
               </div>
             </div>
           )

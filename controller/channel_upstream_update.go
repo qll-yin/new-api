@@ -19,6 +19,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/advancedcustom"
 	"github.com/QuantumNous/new-api/relay/channel/gemini"
 	"github.com/QuantumNous/new-api/relay/channel/ollama"
+	taskhappyhorse "github.com/QuantumNous/new-api/relay/channel/task/happyhorse"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -336,6 +337,10 @@ func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
 	baseURL := constant.ChannelBaseURLs[channel.Type]
 	if channel.GetBaseURL() != "" {
 		baseURL = channel.GetBaseURL()
+	}
+
+	if channel.Type == constant.ChannelTypeAliBailian {
+		return normalizeModelNames(taskhappyhorse.ModelList), nil
 	}
 
 	if channel.Type == constant.ChannelTypeOllama {

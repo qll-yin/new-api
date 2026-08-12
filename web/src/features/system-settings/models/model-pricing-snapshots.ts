@@ -56,6 +56,13 @@ export type ModelPricingSnapshot = {
   hasConflict: boolean
 }
 
+type StoredVideoConfig = {
+  baseResolution?: string
+  resolutionMultipliers?: Record<string, number | string>
+  base_resolution?: string
+  resolution_multipliers?: Record<string, number | string>
+}
+
 export type ModelRow = ModelPricingSnapshot & {
   saved?: ModelPricingSnapshot
   draft?: ModelPricingSnapshot
@@ -84,6 +91,35 @@ const ratioToPrice = (ratio?: string, denominator?: string) => {
   const denominatorNumber = denominator ? toNumberOrNull(denominator) : 2
   if (ratioNumber === null || denominatorNumber === null) return ''
   return formatPricingNumber(ratioNumber * denominatorNumber)
+}
+
+const normalizeStoredVideoConfig = (
+  config?: StoredVideoConfig
+):
+  | {
+      baseResolution?: string
+      resolutionMultipliers?: Record<string, string>
+    }
+  | undefined => {
+  if (!config) return undefined
+
+  const baseResolution = normalizeVideoResolution(
+    config.baseResolution || config.base_resolution || '720P'
+  )
+  const sourceMultipliers =
+    config.resolutionMultipliers || config.resolution_multipliers || {}
+
+  const resolutionMultipliers = Object.fromEntries(
+    Object.entries(sourceMultipliers).map(([resolution, multiplier]) => [
+      normalizeVideoResolution(resolution),
+      String(multiplier),
+    ])
+  )
+
+  return {
+    baseResolution,
+    resolutionMultipliers,
+  }
 }
 
 export const getModeLabel = (mode?: string) => {
@@ -236,13 +272,7 @@ export const buildModelSnapshots = ({
     { fallback: {}, context: 'audio completion ratios' }
   )
   const videoConfigMap = safeJsonParse<
-    Record<
-      string,
-      {
-        baseResolution?: string
-        resolutionMultipliers?: Record<string, number>
-      }
-    >
+    Record<string, StoredVideoConfig>
   >(videoModelConfig, {
     fallback: {},
     context: 'video model config',
@@ -279,21 +309,7 @@ export const buildModelSnapshots = ({
     const image = imageMap[name]?.toString() || ''
     const audio = audioMap[name]?.toString() || ''
     const audioCompletion = audioCompletionMap[name]?.toString() || ''
-    const videoConfig = videoConfigMap[name]
-      ? {
-          baseResolution: normalizeVideoResolution(
-            videoConfigMap[name].baseResolution || '720P'
-          ),
-          resolutionMultipliers: Object.fromEntries(
-            Object.entries(videoConfigMap[name].resolutionMultipliers || {}).map(
-              ([resolution, multiplier]) => [
-                normalizeVideoResolution(resolution),
-                multiplier.toString(),
-              ]
-            )
-          ),
-        }
-      : undefined
+    const videoConfig = normalizeStoredVideoConfig(videoConfigMap[name])
 
     const modeForModel = billingModeMap[name]
     if (modeForModel === 'tiered_expr') {

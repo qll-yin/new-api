@@ -591,7 +591,22 @@ const ModelRatioVisualEditorComponent = forwardRef<
           setIfPresent(audioCompletionMap, name, data.audioCompletionRatio)
         } else if (data.billingMode === 'video') {
           setIfPresent(priceMap, name, data.price)
-          videoConfigMap[name] = data.videoConfig || {}
+          billingModeMap[name] = 'video'
+          videoConfigMap[name] = data.videoConfig
+            ? {
+                base_resolution: data.videoConfig.baseResolution || '720P',
+                resolution_multipliers: Object.fromEntries(
+                  Object.entries(
+                    data.videoConfig.resolutionMultipliers || {}
+                  ).flatMap(([resolution, multiplier]) => {
+                    const parsed = Number(multiplier)
+                    return Number.isFinite(parsed) && parsed > 0
+                      ? [[resolution, parsed] as const]
+                      : []
+                  })
+                ),
+              }
+            : {}
         } else if (data.price && data.price !== '') {
           setIfPresent(priceMap, name, data.price)
           delete videoConfigMap[name]

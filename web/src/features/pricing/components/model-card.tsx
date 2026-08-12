@@ -30,8 +30,13 @@ import {
   getDynamicPricingSummary,
 } from '../lib/dynamic-price'
 import { parseTags } from '../lib/filters'
-import { isTokenBasedModel } from '../lib/model-helpers'
-import { formatPrice, formatRequestPrice } from '../lib/price'
+import {
+  getVideoPricingConfig,
+  getVideoPricingResolutions,
+  isTokenBasedModel,
+  isVideoPricingModel,
+} from '../lib/model-helpers'
+import { formatPrice, formatRequestPrice, formatVideoPrice } from '../lib/price'
 import type { PricingModel, TokenUnit } from '../types'
 import { ModelBillingModeBadge } from './model-billing-mode-badge'
 import { ModelPerfBadge, type ModelPerfBadgeData } from './model-perf-badge'
@@ -55,6 +60,7 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
   const usdExchangeRate = props.usdExchangeRate ?? 1
   const showRechargePrice = props.showRechargePrice ?? false
   const isTokenBased = isTokenBasedModel(props.model)
+  const isVideoPricing = isVideoPricingModel(props.model)
   const tokenUnitLabel = tokenUnit === 'K' ? '1K' : '1M'
   const tags = parseTags(props.model.tags)
   const groups = props.model.enable_groups || []
@@ -172,6 +178,51 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
                 props.selectedGroup
               )}
             </span>
+          </span>
+        )}
+      </>
+    )
+  } else if (isVideoPricing) {
+    const videoConfig = getVideoPricingConfig(props.model)
+    const resolutions = getVideoPricingResolutions(props.model)
+    const displayResolutions = resolutions.slice(0, 2)
+    const baseResolution = videoConfig?.base_resolution
+
+    priceSummary = (
+      <>
+        {displayResolutions.map((resolution) => (
+          <span
+            key={resolution}
+            className='text-muted-foreground whitespace-nowrap'
+          >
+            {resolution}{' '}
+            <span className='text-foreground font-mono font-semibold'>
+              {formatVideoPrice(
+                props.model,
+                resolution,
+                showRechargePrice,
+                priceRate,
+                usdExchangeRate,
+                props.selectedGroup
+              )}
+            </span>{' '}
+            / {t('second')}
+          </span>
+        ))}
+        {displayResolutions.length === 0 && baseResolution && (
+          <span className='text-muted-foreground whitespace-nowrap'>
+            {baseResolution}{' '}
+            <span className='text-foreground font-mono font-semibold'>
+              {formatVideoPrice(
+                props.model,
+                baseResolution,
+                showRechargePrice,
+                priceRate,
+                usdExchangeRate,
+                props.selectedGroup
+              )}
+            </span>{' '}
+            / {t('second')}
           </span>
         )}
       </>

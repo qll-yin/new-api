@@ -67,8 +67,19 @@ import {
   isDynamicPricingModel,
 } from '../lib/dynamic-price'
 import { parseTags } from '../lib/filters'
-import { getAvailableGroups, isTokenBasedModel } from '../lib/model-helpers'
-import { formatFixedPrice, formatGroupPrice } from '../lib/price'
+import {
+  getAvailableGroups,
+  getVideoPricingConfig,
+  getVideoPricingResolutions,
+  isTokenBasedModel,
+  isVideoPricingModel,
+} from '../lib/model-helpers'
+import {
+  formatFixedPrice,
+  formatFixedVideoPrice,
+  formatGroupPrice,
+  formatVideoPrice,
+} from '../lib/price'
 import type {
   ModelCapability,
   PriceType,
@@ -575,6 +586,7 @@ function PriceSection(props: {
 }) {
   const { t } = useTranslation()
   const isTokenBased = isTokenBasedModel(props.model)
+  const isVideoPricing = isVideoPricingModel(props.model)
   const tokenUnitLabel = props.tokenUnit === 'K' ? '1K' : '1M'
   const baseGroupKey = '_base'
   const baseGroupRatioMap = { [baseGroupKey]: 1 }
@@ -698,6 +710,42 @@ function PriceSection(props: {
             </div>
           </div>
         )}
+      </section>
+    )
+  }
+
+  if (isVideoPricing) {
+    const videoConfig = getVideoPricingConfig(props.model)
+    const resolutions = getVideoPricingResolutions(props.model)
+    const displayResolutions =
+      resolutions.length > 0
+        ? resolutions
+        : videoConfig?.base_resolution
+          ? [videoConfig.base_resolution]
+          : []
+
+    return (
+      <section>
+        <SectionTitle>{t('Base Price')}</SectionTitle>
+        <div className='grid grid-cols-2 gap-2'>
+          {displayResolutions.map((resolution) => (
+            <div key={resolution} className='bg-muted/20 rounded-lg border p-3'>
+              <div className='text-muted-foreground text-xs'>{resolution}</div>
+              <div className='text-foreground mt-1 font-mono text-base font-semibold tabular-nums'>
+                {formatVideoPrice(
+                  props.model,
+                  resolution,
+                  props.showRechargePrice,
+                  props.priceRate,
+                  props.usdExchangeRate
+                )}
+                <span className='text-muted-foreground/40 ml-1 text-xs font-normal'>
+                  / {t('second')}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
       </section>
     )
   }
@@ -868,6 +916,7 @@ function GroupPricingSection(props: {
   )
 
   const isTokenBased = isTokenBasedModel(props.model)
+  const isVideoPricing = isVideoPricingModel(props.model)
   const tokenUnitLabel = props.tokenUnit === 'K' ? '1K' : '1M'
 
   const extraPriceTypes = useMemo(() => {
@@ -1041,6 +1090,23 @@ function GroupPricingSection(props: {
       props.usdExchangeRate,
       props.groupRatio
     )
+  const videoConfig = getVideoPricingConfig(props.model)
+  const videoResolutions =
+    getVideoPricingResolutions(props.model).length > 0
+      ? getVideoPricingResolutions(props.model)
+      : videoConfig?.base_resolution
+        ? [videoConfig.base_resolution]
+        : []
+  const renderFixedVideoGroupPrice = (group: string, resolution: string) =>
+    formatFixedVideoPrice(
+      props.model,
+      group,
+      resolution,
+      showRechargePrice,
+      props.priceRate,
+      props.usdExchangeRate,
+      props.groupRatio
+    )
 
   return (
     <section>
@@ -1091,6 +1157,15 @@ function GroupPricingSection(props: {
                   cell: (group: string) => renderGroupPrice(group, ep.type),
                 })),
               ]
+            : isVideoPricing
+              ? videoResolutions.map((resolution) => ({
+                  id: `video-${resolution}`,
+                  header: resolution,
+                  className: `${thClass} text-right`,
+                  cellClassName: 'py-2.5 text-right font-mono',
+                  cell: (group: string) =>
+                    `${renderFixedVideoGroupPrice(group, resolution)} / ${t('second')}`,
+                }))
             : [
                 {
                   id: 'price',

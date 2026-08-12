@@ -197,6 +197,11 @@ export const TASK_STATUS = {
   SUCCESS: 'SUCCESS', // 成功
   FAILURE: 'FAILURE', // 失败
   QUEUED: 'QUEUED', // 排队中
+  PENDING: 'PENDING', // 排队中（阿里任务原始状态）
+  RUNNING: 'RUNNING', // 处理中（阿里任务原始状态）
+  SUCCEEDED: 'SUCCEEDED', // 成功（阿里任务原始状态）
+  FAILED: 'FAILED', // 失败（阿里任务原始状态）
+  CANCELED: 'CANCELED', // 取消（阿里任务原始状态）
   UNKNOWN: 'UNKNOWN', // 未知
 } as const
 
@@ -312,6 +317,11 @@ export const TASK_STATUS_MAPPINGS: Record<string, StatusMapping> = {
   [TASK_STATUS.IN_PROGRESS]: { label: 'In Progress', variant: 'blue' },
   [TASK_STATUS.FAILURE]: { label: 'Failed', variant: 'red' },
   [TASK_STATUS.QUEUED]: { label: 'Queued', variant: 'orange' },
+  [TASK_STATUS.PENDING]: { label: 'Queued', variant: 'orange' },
+  [TASK_STATUS.RUNNING]: { label: 'In Progress', variant: 'blue' },
+  [TASK_STATUS.SUCCEEDED]: { label: 'Success', variant: 'green' },
+  [TASK_STATUS.FAILED]: { label: 'Failed', variant: 'red' },
+  [TASK_STATUS.CANCELED]: { label: 'Cancelled', variant: 'neutral' },
   [TASK_STATUS.UNKNOWN]: { label: 'Unknown', variant: 'neutral' },
 }
 

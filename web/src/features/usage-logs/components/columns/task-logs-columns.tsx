@@ -36,6 +36,7 @@ import {
   type AudioClip,
 } from '../dialogs/audio-preview-dialog'
 import { FailReasonDialog } from '../dialogs/fail-reason-dialog'
+import { TaskDetailsDialog } from '../dialogs/task-details-dialog'
 import { useUsageLogsContext } from '../usage-logs-provider'
 import {
   createDurationColumn,
@@ -54,6 +55,36 @@ function parseTaskData(data: unknown): unknown[] {
     }
   }
   return []
+}
+
+function toTaskDetailText(value: unknown): string {
+  if (value == null) return '-'
+  if (typeof value === 'string') return value
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+
+function hasTaskDetails(log: TaskLog): boolean {
+  return Boolean(log.data || log.result_url || log.fail_reason)
+}
+
+function getTaskDetailPreview(log: TaskLog): {
+  text: string
+  tone: 'default' | 'danger' | 'muted'
+} {
+  if (log.fail_reason) {
+    return { text: toTaskDetailText(log.fail_reason), tone: 'danger' }
+  }
+  if (log.result_url) {
+    return { text: toTaskDetailText(log.result_url), tone: 'default' }
+  }
+  if (log.data) {
+    return { text: toTaskDetailText(log.data), tone: 'muted' }
+  }
+  return { text: '-', tone: 'muted' }
 }
 
 function AudioPreviewCell({ log }: { log: TaskLog }) {
@@ -218,7 +249,7 @@ export function useTaskLogsColumns(isAdmin: boolean): ColumnDef<TaskLog>[] {
       header: t('Details'),
       cell: function DetailsCell({ row }) {
         const log = row.original
-        const failReason = row.getValue('fail_reason') as string
+        const failReason = toTaskDetailText(row.getValue('fail_reason'))
         const status = log.status
         const [dialogOpen, setDialogOpen] = useState(false)
 
@@ -244,8 +275,9 @@ export function useTaskLogsColumns(isAdmin: boolean): ColumnDef<TaskLog>[] {
           log.action === TASK_ACTIONS.FIRST_TAIL_GENERATE ||
           log.action === TASK_ACTIONS.REFERENCE_GENERATE ||
           log.action === TASK_ACTIONS.REMIX_GENERATE
-        const isSuccess = status === TASK_STATUS.SUCCESS
-        const isUrl = failReason?.startsWith('http')
+        const isSuccess =
+          status === TASK_STATUS.SUCCESS || status === TASK_STATUS.SUCCEEDED
+        const isUrl = failReason.startsWith('http')
 
         if (isSuccess && isVideoTask && isUrl) {
           const videoUrl = `/v1/videos/${log.task_id}/content`
@@ -261,9 +293,17 @@ export function useTaskLogsColumns(isAdmin: boolean): ColumnDef<TaskLog>[] {
           )
         }
 
-        if (!failReason) {
+        if (!hasTaskDetails(log)) {
           return <span className='text-muted-foreground/60 text-xs'>-</span>
         }
+
+        const preview = getTaskDetailPreview(log)
+        const previewClassName =
+          preview.tone === 'danger'
+            ? 'text-red-600 dark:text-red-400'
+            : preview.tone === 'muted'
+              ? 'text-muted-foreground'
+              : 'text-foreground'
 
         return (
           <>
@@ -271,17 +311,30 @@ export function useTaskLogsColumns(isAdmin: boolean): ColumnDef<TaskLog>[] {
               type='button'
               className='group flex max-w-[200px] items-center gap-1 text-left text-xs'
               onClick={() => setDialogOpen(true)}
-              title={t('Click to view full error message')}
+              title={t('Click to view full details')}
             >
-              <span className='truncate leading-snug text-red-600 group-hover:underline dark:text-red-400'>
-                {failReason}
+              <span
+                className={cn(
+                  'truncate leading-snug group-hover:underline',
+                  previewClassName
+                )}
+              >
+                {preview.text}
               </span>
             </button>
-            <FailReasonDialog
-              failReason={failReason}
-              open={dialogOpen}
-              onOpenChange={setDialogOpen}
-            />
+            {log.data || log.result_url ? (
+              <TaskDetailsDialog
+                log={log}
+                open={dialogOpen}
+                onOpenChange={setDialogOpen}
+              />
+            ) : (
+              <FailReasonDialog
+                failReason={failReason}
+                open={dialogOpen}
+                onOpenChange={setDialogOpen}
+              />
+            )}
           </>
         )
       },
