@@ -210,10 +210,9 @@
 
 相关文件：
 
-- `web/classic/src/pages/Setting/Ratio/components/ModelPricingEditor.jsx`
-- `web/classic/src/pages/Setting/Ratio/ModelRatioSettings.jsx`
-- `web/classic/src/components/table/model-pricing/...`
-- `web/default/src/features/system-settings/models/...`
+- `web/src/features/system-settings/models/model-pricing-sheet.tsx`
+- `web/src/features/system-settings/models/model-ratio-visual-editor.tsx`
+- `web/src/features/system-settings/models/...`
 
 ## 10. 使用日志前端展示增强
 
@@ -238,9 +237,9 @@
 
 相关文件：
 
-- `web/classic/src/components/table/usage-logs/UsageLogsColumnDefs.jsx`
-- `web/classic/src/hooks/usage-logs/useUsageLogsData.jsx`
-- `web/default/src/features/usage-logs/...`
+- `web/src/features/usage-logs/components/columns/common-logs-columns.tsx`
+- `web/src/features/usage-logs/components/dialogs/details-dialog.tsx`
+- `web/src/features/usage-logs/...`
 
 ## 11. 多语言补充
 
@@ -258,8 +257,7 @@
 
 相关目录：
 
-- `web/classic/src/i18n/locales/`
-- `web/default/src/i18n/locales/`
+- `web/src/i18n/locales/`
 
 ## 12. 测试与文档补充
 
@@ -307,4 +305,3 @@
 
 - 一份“面向管理员”的功能说明，强调如何配置视频模型、如何配置价格、怎么看日志。
 - 一份“面向开发”的技术设计文档，强调任务链路、计费链路、状态同步、日志字段与扩展点。
-

@@ -267,7 +267,7 @@ export function buildPreviewRows(
   videoBaseResolution: VideoResolution,
   videoBasePrice: string,
   videoResolutionPrices: Record<VideoResolution, string>,
-  t: (key: string) => string
+  t: (key: string, opts?: Record<string, unknown>) => string
 ): PreviewRow[] {
   if (mode === 'tiered_expr') {
     const effectiveExpr = combineBillingExpr(billingExpr, requestRuleExpr)

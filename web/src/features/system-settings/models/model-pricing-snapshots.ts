@@ -104,7 +104,7 @@ export const getModeVariant = (
 
 const getExpressionSummary = (
   row: ModelPricingSnapshot,
-  t: (key: string) => string
+  t: (key: string, opts?: Record<string, unknown>) => string
 ) => {
   const tierCount = (row.billingExpr?.match(/tier\(/g) || []).length
   if (tierCount > 0) {
@@ -115,7 +115,7 @@ const getExpressionSummary = (
 
 export const getPriceSummary = (
   row: ModelPricingSnapshot,
-  t: (key: string) => string
+  t: (key: string, opts?: Record<string, unknown>) => string
 ) => {
   if (row.billingMode === 'tiered_expr') {
     return getExpressionSummary(row, t)
@@ -149,7 +149,7 @@ export const getPriceSummary = (
 
 export const getPriceDetail = (
   row: ModelPricingSnapshot,
-  t: (key: string) => string
+  t: (key: string, opts?: Record<string, unknown>) => string
 ) => {
   if (row.billingMode === 'tiered_expr') {
     return row.requestRuleExpr
