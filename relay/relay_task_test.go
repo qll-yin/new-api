@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -60,10 +61,16 @@ func TestResetTaskStatusCodeUsesChannelMapping(t *testing.T) {
 func TestApplyTaskOtherRatiosToQuotaRoundsFinalQuota(t *testing.T) {
 	t.Parallel()
 
-	got := applyTaskOtherRatiosToQuota(70000, map[string]float64{
+	info := &relaycommon.RelayInfo{
+		PriceData: types.PriceData{
+			Quota: 70000,
+		},
+	}
+	got, ok := recalcQuotaFromRatios(info, map[string]float64{
 		"seconds":          10,
 		"resolution-1080P": 1.2857142857142858,
 	})
 
+	require.True(t, ok)
 	require.Equal(t, 900000, got)
 }

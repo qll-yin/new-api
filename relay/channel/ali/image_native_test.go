@@ -4,8 +4,8 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/types"
 )
 
@@ -31,10 +31,15 @@ func TestQwenWanImageNativeInputAndParametersRemainInImageExtra(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected image conversion to succeed, got error: %v", err)
 	}
-	if aliReq.Input == nil || len(aliReq.Input.Messages) != 1 {
+	input, ok := aliReq.Input.(map[string]any)
+	if !ok {
+		t.Fatalf("expected native input to remain a generic object, got %+v", aliReq.Input)
+	}
+	messages, ok := input["messages"].([]any)
+	if !ok || len(messages) != 1 {
 		t.Fatalf("expected native input messages to be preserved, got %+v", aliReq.Input)
 	}
-	if aliReq.Parameters.Size != "2K" || aliReq.Parameters.N != 2 || !aliReq.Parameters.Watermark {
+	if aliReq.Parameters.Size != "2K" || aliReq.Parameters.N != 2 || aliReq.Parameters.Watermark == nil || !*aliReq.Parameters.Watermark {
 		t.Fatalf("expected native parameters to be preserved, got %+v", aliReq.Parameters)
 	}
 }
