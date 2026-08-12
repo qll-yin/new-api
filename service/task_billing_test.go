@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -187,6 +189,27 @@ func countLogs(t *testing.T) int64 {
 	return count
 }
 
+func getUserUsedQuotaValue(t *testing.T, id int) int {
+	t.Helper()
+	var user model.User
+	require.NoError(t, model.DB.Select("used_quota").Where("id = ?", id).First(&user).Error)
+	return user.UsedQuota
+}
+
+func getChannelUsedQuotaValue(t *testing.T, id int) int64 {
+	t.Helper()
+	var channel model.Channel
+	require.NoError(t, model.DB.Select("used_quota").Where("id = ?", id).First(&channel).Error)
+	return channel.UsedQuota
+}
+
+func getLogsByRequestID(t *testing.T, requestID string) []*model.Log {
+	t.Helper()
+	var logs []*model.Log
+	require.NoError(t, model.LOG_DB.Where("request_id = ?", requestID).Order("id asc").Find(&logs).Error)
+	return logs
+}
+
 // ===========================================================================
 // RefundTaskQuota tests
 // ===========================================================================
@@ -214,11 +237,11 @@ func TestRefundTaskQuota_Wallet(t *testing.T) {
 	assert.Equal(t, tokenRemain+preConsumed, getTokenRemainQuota(t, tokenID))
 	assert.Equal(t, -preConsumed, getTokenUsedQuota(t, tokenID))
 
-	// A refund log should be created
+	// Without an existing consume log, a fallback error log should be created
 	log := getLastLog(t)
 	require.NotNil(t, log)
-	assert.Equal(t, model.LogTypeRefund, log.Type)
-	assert.Equal(t, preConsumed, log.Quota)
+	assert.Equal(t, model.LogTypeError, log.Type)
+	assert.Equal(t, 0, log.Quota)
 	assert.Equal(t, "test-model", log.ModelName)
 }
 
@@ -248,7 +271,7 @@ func TestRefundTaskQuota_Subscription(t *testing.T) {
 
 	log := getLastLog(t)
 	require.NotNil(t, log)
-	assert.Equal(t, model.LogTypeRefund, log.Type)
+	assert.Equal(t, model.LogTypeError, log.Type)
 }
 
 func TestRefundTaskQuota_ZeroQuota(t *testing.T) {
@@ -289,7 +312,121 @@ func TestRefundTaskQuota_NoToken(t *testing.T) {
 	// Log created
 	log := getLastLog(t)
 	require.NotNil(t, log)
-	assert.Equal(t, model.LogTypeRefund, log.Type)
+	assert.Equal(t, model.LogTypeError, log.Type)
+}
+
+func TestRefundTaskQuota_ConvertsExistingConsumeLogToSingleErrorLog(t *testing.T) {
+	truncate(t)
+
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(nil)
+	req, err := http.NewRequest(http.MethodPost, "/v1/video/generations", nil)
+	require.NoError(t, err)
+	c.Request = req
+	c.Set("token_name", "test_token")
+	c.Set(common.RequestIdKey, "req-task-refund-1")
+
+	const userID, tokenID, channelID = 5, 5, 5
+	const initQuota, preConsumed = 10000, 1800
+	const tokenRemain = 4000
+
+	seedUser(t, userID, initQuota)
+	seedToken(t, tokenID, userID, "sk-refund-log", tokenRemain)
+	seedChannel(t, channelID)
+
+	info := &relaycommon.RelayInfo{
+		UserId:          userID,
+		TokenId:         tokenID,
+		UsingGroup:      "default",
+		OriginModelName: "test-model",
+		RequestId:       "req-task-refund-1",
+		PriceData: types.PriceData{
+			Quota: preConsumed,
+			GroupRatioInfo: types.GroupRatioInfo{
+				GroupRatio: 1,
+			},
+			ModelPrice: 0.02,
+		},
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelId: channelID,
+		},
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{
+			PublicTaskID: "task_public_refund_1",
+		},
+	}
+
+	LogTaskConsumption(c, info)
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.TaskID = "task_public_refund_1"
+	task.Status = model.TaskStatusFailure
+	task.FailReason = "task failed"
+	task.PrivateData.RequestID = "req-task-refund-1"
+
+	RefundTaskQuota(context.Background(), task, task.FailReason)
+
+	logs := getLogsByRequestID(t, "req-task-refund-1")
+	require.Len(t, logs, 1)
+	assert.Equal(t, model.LogTypeError, logs[0].Type)
+	assert.Equal(t, 0, logs[0].Quota)
+	assert.Equal(t, initQuota+preConsumed, getUserQuota(t, userID))
+	assert.Equal(t, tokenRemain+preConsumed, getTokenRemainQuota(t, tokenID))
+}
+
+func TestRefundTaskQuota_RollsBackUsedQuotaStats(t *testing.T) {
+	truncate(t)
+
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(nil)
+	req, err := http.NewRequest(http.MethodPost, "/v1/video/generations", nil)
+	require.NoError(t, err)
+	c.Request = req
+	c.Set("token_name", "test_token")
+	c.Set(common.RequestIdKey, "req-task-refund-2")
+
+	const userID, tokenID, channelID = 6, 6, 6
+	const initQuota, preConsumed = 10000, 2200
+	const tokenRemain = 4000
+
+	seedUser(t, userID, initQuota)
+	seedToken(t, tokenID, userID, "sk-refund-stats", tokenRemain)
+	seedChannel(t, channelID)
+
+	info := &relaycommon.RelayInfo{
+		UserId:          userID,
+		TokenId:         tokenID,
+		UsingGroup:      "default",
+		OriginModelName: "test-model",
+		RequestId:       "req-task-refund-2",
+		PriceData: types.PriceData{
+			Quota: preConsumed,
+			GroupRatioInfo: types.GroupRatioInfo{
+				GroupRatio: 1,
+			},
+			ModelPrice: 0.02,
+		},
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelId: channelID,
+		},
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{
+			PublicTaskID: "task_public_refund_2",
+		},
+	}
+
+	LogTaskConsumption(c, info)
+	assert.Equal(t, preConsumed, getUserUsedQuotaValue(t, userID))
+	assert.Equal(t, int64(preConsumed), getChannelUsedQuotaValue(t, channelID))
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.TaskID = "task_public_refund_2"
+	task.Status = model.TaskStatusFailure
+	task.FailReason = "task failed"
+	task.PrivateData.RequestID = "req-task-refund-2"
+
+	RefundTaskQuota(context.Background(), task, task.FailReason)
+
+	assert.Equal(t, 0, getUserUsedQuotaValue(t, userID))
+	assert.Equal(t, int64(0), getChannelUsedQuotaValue(t, channelID))
 }
 
 func TestLogTaskConsumption_ZeroQuota_NoLog(t *testing.T) {
@@ -323,6 +460,185 @@ func TestLogTaskConsumption_ZeroQuota_NoLog(t *testing.T) {
 	assert.Equal(t, int64(0), countLogs(t))
 }
 
+func TestLogTaskConsumption_RecordsOtherRatiosInStructuredOther(t *testing.T) {
+	truncate(t)
+
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(nil)
+	req, err := http.NewRequest(http.MethodPost, "/v1/video/generations", nil)
+	require.NoError(t, err)
+	c.Request = req
+	c.Set("token_name", "test_token")
+	c.Set(common.RequestIdKey, "req-task-consume-ratios-1")
+
+	const userID, tokenID, channelID = 31, 31, 31
+	seedUser(t, userID, 1000000)
+	seedToken(t, tokenID, userID, "sk-task-ratios", 1000000)
+	seedChannel(t, channelID)
+
+	info := &relaycommon.RelayInfo{
+		UserId:          userID,
+		TokenId:         tokenID,
+		UsingGroup:      "default",
+		OriginModelName: "happyhorse-1.0-t2v",
+		RequestId:       "req-task-consume-ratios-1",
+		PriceData: types.PriceData{
+			Quota:              900000,
+			ModelPrice:         0.14,
+			ResolvedModelPrice: 0.18,
+			GroupRatioInfo: types.GroupRatioInfo{
+				GroupRatio: 1,
+			},
+			OtherRatios: map[string]float64{
+				"seconds":          10,
+				"resolution-1080P": 1.2857142857142858,
+			},
+		},
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelId: channelID,
+		},
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{
+			Action:       "generate",
+			PublicTaskID: "task_public_ratios_1",
+		},
+	}
+
+	LogTaskConsumption(c, info)
+
+	logs := getLogsByRequestID(t, "req-task-consume-ratios-1")
+	require.Len(t, logs, 1)
+	other, err := common.StrToMap(logs[0].Other)
+	require.NoError(t, err)
+	assert.InEpsilon(t, 0.18, other["model_price"], 0.000001)
+	assert.EqualValues(t, 10, other["seconds"])
+	assert.InEpsilon(t, 1.2857142857142858, other["resolution-1080P"], 0.000001)
+}
+func TestLogTaskCreateFailure_RecordsTaskErrorLog(t *testing.T) {
+	truncate(t)
+
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(nil)
+	req, err := http.NewRequest(http.MethodPost, "/v1/video/generations", nil)
+	require.NoError(t, err)
+	c.Request = req
+	c.Set("token_name", "test_token")
+	c.Set("username", "test_user")
+	c.Set(common.RequestIdKey, "req-task-create-fail-1")
+
+	const userID, tokenID, channelID = 7, 7, 7
+	seedUser(t, userID, 10000)
+	seedToken(t, tokenID, userID, "sk-task-create-fail", 5000)
+	seedChannel(t, channelID)
+
+	startTime := time.Now()
+	common.SetContextKey(c, constant.ContextKeyRequestStartTime, startTime.Add(-3*time.Second))
+
+	info := &relaycommon.RelayInfo{
+		UserId:          userID,
+		TokenId:         tokenID,
+		UsingGroup:      "default",
+		OriginModelName: "wan2.7-t2v",
+		StartTime:       startTime,
+		PriceData: types.PriceData{
+			Quota: 1800,
+			GroupRatioInfo: types.GroupRatioInfo{
+				GroupRatio: 1.2,
+			},
+			ModelPrice: 0.03,
+			ModelRatio: 2.5,
+			OtherRatios: map[string]float64{
+				"seconds": 5,
+				"size":    1.66,
+			},
+		},
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelId:         channelID,
+			UpstreamModelName: "wanx2.1-t2v-turbo",
+			IsModelMapped:     true,
+		},
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{
+			Action:       "video",
+			PublicTaskID: "task_public_create_fail_1",
+		},
+		Billing: &BillingSession{},
+	}
+
+	taskErr := &dto.TaskError{
+		Code:       "do_request_failed",
+		Message:    "Post upstream failed",
+		StatusCode: http.StatusInternalServerError,
+	}
+
+	LogTaskCreateFailure(c, info, taskErr)
+
+	logs := getLogsByRequestID(t, "req-task-create-fail-1")
+	require.Len(t, logs, 1)
+	log := logs[0]
+	assert.Equal(t, model.LogTypeError, log.Type)
+	assert.Equal(t, 0, log.Quota)
+	assert.Equal(t, "wan2.7-t2v", log.ModelName)
+	assert.Equal(t, channelID, log.ChannelId)
+	assert.Equal(t, tokenID, log.TokenId)
+	assert.Equal(t, "Post upstream failed", log.Content)
+
+	other, err := common.StrToMap(log.Other)
+	require.NoError(t, err)
+	assert.Equal(t, true, other["is_task"])
+	assert.Equal(t, "FAILURE", other["task_status"])
+	assert.Equal(t, "task_public_create_fail_1", other["task_id"])
+	assert.Equal(t, "video", other["task_action"])
+	assert.Equal(t, "/v1/video/generations", other["request_path"])
+	assert.Equal(t, "Post upstream failed", other["reason"])
+	assert.Equal(t, "do_request_failed", other["error_code"])
+	assert.EqualValues(t, http.StatusInternalServerError, other["status_code"])
+	assert.EqualValues(t, 1800, other["pre_consumed_quota"])
+	assert.EqualValues(t, 0, other["actual_quota"])
+	assert.EqualValues(t, 1800, other["refunded_quota"])
+	assert.Equal(t, true, other["is_model_mapped"])
+	assert.Equal(t, "wanx2.1-t2v-turbo", other["upstream_model_name"])
+	assert.EqualValues(t, 5, other["seconds"])
+}
+
+func TestLogTaskCreateFailure_LocalErrorSkipped(t *testing.T) {
+	truncate(t)
+
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(nil)
+	req, err := http.NewRequest(http.MethodPost, "/v1/video/generations", nil)
+	require.NoError(t, err)
+	c.Request = req
+	c.Set(common.RequestIdKey, "req-task-create-fail-2")
+
+	info := &relaycommon.RelayInfo{
+		UserId:          8,
+		TokenId:         8,
+		UsingGroup:      "default",
+		OriginModelName: "wan2.7-t2v",
+		StartTime:       time.Now(),
+		PriceData: types.PriceData{
+			Quota: 1000,
+		},
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelId: 8,
+		},
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{
+			PublicTaskID: "task_public_create_fail_2",
+		},
+		Billing: &BillingSession{},
+	}
+
+	taskErr := &dto.TaskError{
+		Code:       "invalid_request",
+		Message:    "bad request",
+		StatusCode: http.StatusBadRequest,
+		LocalError: true,
+	}
+
+	LogTaskCreateFailure(c, info, taskErr)
+
+	assert.Equal(t, int64(0), countLogs(t))
+}
+
 func TestTaskBillingOther_FillsFallbackRatios(t *testing.T) {
 	truncate(t)
 
@@ -342,6 +658,82 @@ func TestTaskBillingOther_FillsFallbackRatios(t *testing.T) {
 	assert.Equal(t, modelRatio, other["model_ratio"])
 	assert.Equal(t, float64(1), other["group_ratio"])
 	assert.Equal(t, completionRatio, other["completion_ratio"])
+}
+
+func TestTaskBillingOther_UsesResolvedVideoModelPrice(t *testing.T) {
+	truncate(t)
+
+	task := makeTask(1, 1, 1000, 0, BillingSourceWallet, 0)
+	task.Properties.OriginModelName = "happyhorse-1.0-t2v"
+	task.PrivateData.BillingContext = &model.TaskBillingContext{
+		ModelPrice:         0.14,
+		ResolvedModelPrice: 0.18,
+		OriginModelName:    "happyhorse-1.0-t2v",
+		OtherRatios: map[string]float64{
+			"seconds":          15,
+			"resolution-1080P": 0.18 / 0.14,
+		},
+	}
+
+	other := taskBillingOther(task)
+	assert.InEpsilon(t, 0.18, other["model_price"], 0.000001)
+	assert.EqualValues(t, 15, other["seconds"])
+}
+
+func TestSyncTaskStateLog_PrefersUpstreamTaskStatus(t *testing.T) {
+	truncate(t)
+
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(nil)
+	req, err := http.NewRequest(http.MethodPost, "/v1/video/generations", nil)
+	require.NoError(t, err)
+	c.Request = req
+	c.Set("token_name", "test_token")
+	c.Set(common.RequestIdKey, "req-task-status-upstream-1")
+
+	const userID, tokenID, channelID = 9, 9, 9
+	const preConsumed = 1200
+
+	seedUser(t, userID, 10000)
+	seedToken(t, tokenID, userID, "sk-task-status-upstream", 5000)
+	seedChannel(t, channelID)
+
+	info := &relaycommon.RelayInfo{
+		UserId:          userID,
+		TokenId:         tokenID,
+		UsingGroup:      "default",
+		OriginModelName: "wan2.7-t2v",
+		PriceData: types.PriceData{
+			Quota: preConsumed,
+			GroupRatioInfo: types.GroupRatioInfo{
+				GroupRatio: 1,
+			},
+		},
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelId: channelID,
+		},
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{
+			PublicTaskID: "task_public_status_upstream_1",
+		},
+	}
+
+	LogTaskConsumption(c, info)
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.TaskID = "task_public_status_upstream_1"
+	task.Status = model.TaskStatusSuccess
+	task.Progress = "100%"
+	task.PrivateData.RequestID = "req-task-status-upstream-1"
+	task.Data = json.RawMessage(`{"output":{"task_status":"SUCCEEDED","video_url":"https://example.com/video.mp4"}}`)
+
+	SyncTaskStateLog(context.Background(), task)
+
+	logs := getLogsByRequestID(t, "req-task-status-upstream-1")
+	require.Len(t, logs, 1)
+
+	other, err := common.StrToMap(logs[0].Other)
+	require.NoError(t, err)
+	assert.Equal(t, "SUCCEEDED", other["task_status"])
 }
 
 // ===========================================================================
@@ -552,7 +944,24 @@ func TestCASGuardedRefund_Win(t *testing.T) {
 
 	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
 	task.Status = model.TaskStatus(model.TaskStatusInProgress)
+	task.PrivateData.RequestID = "req-cas-refund-win"
 	require.NoError(t, model.DB.Create(task).Error)
+
+	require.NoError(t, model.LOG_DB.Create(&model.Log{
+		UserId:    userID,
+		Username:  "test_user",
+		CreatedAt: common.GetTimestamp(),
+		Type:      model.LogTypeConsume,
+		ModelName: "test-model",
+		Quota:     preConsumed,
+		ChannelId: channelID,
+		TokenId:   tokenID,
+		Group:     "default",
+		RequestId: "req-cas-refund-win",
+		Other:     `{"is_task":true,"task_status":"SUBMITTED"}`,
+	}).Error)
+	model.UpdateUserUsedQuotaAndRequestCount(userID, preConsumed)
+	model.UpdateChannelUsedQuota(channelID, preConsumed)
 
 	simulatePollBilling(ctx, task, model.TaskStatus(model.TaskStatusFailure), 0)
 
@@ -564,10 +973,13 @@ func TestCASGuardedRefund_Win(t *testing.T) {
 	// Refund should have happened
 	assert.Equal(t, initQuota+preConsumed, getUserQuota(t, userID))
 	assert.Equal(t, tokenRemain+preConsumed, getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, 0, getUserUsedQuotaValue(t, userID))
+	assert.Equal(t, int64(0), getChannelUsedQuotaValue(t, channelID))
 
-	log := getLastLog(t)
-	require.NotNil(t, log)
-	assert.Equal(t, model.LogTypeRefund, log.Type)
+	logs := getLogsByRequestID(t, "req-cas-refund-win")
+	require.Len(t, logs, 1)
+	assert.Equal(t, model.LogTypeError, logs[0].Type)
+	assert.Equal(t, 0, logs[0].Quota)
 }
 
 func TestCASGuardedRefund_Lose(t *testing.T) {
@@ -669,7 +1081,8 @@ func TestNonTerminalUpdate_NoBilling(t *testing.T) {
 // ===========================================================================
 
 type mockAdaptor struct {
-	adjustReturn int
+	adjustReturn       int
+	allowPerCallAdjust bool
 }
 
 func (m *mockAdaptor) Init(_ *relaycommon.RelayInfo) {}
@@ -680,21 +1093,52 @@ func (m *mockAdaptor) ParseTaskResult([]byte) (*relaycommon.TaskInfo, error) { r
 func (m *mockAdaptor) AdjustBillingOnComplete(_ *model.Task, _ *relaycommon.TaskInfo) int {
 	return m.adjustReturn
 }
+func (m *mockAdaptor) AllowPerCallBillingAdjustment(_ *model.Task, _ *relaycommon.TaskInfo) bool {
+	return m.allowPerCallAdjust
+}
 
 // ===========================================================================
-// PerCallBilling tests — settleTaskBillingOnComplete
+// PerCallBilling tests - settleTaskBillingOnComplete
 // ===========================================================================
 
-func TestSettle_PerCallBilling_SkipsAdaptorAdjust(t *testing.T) {
+func TestSettle_PerCallBilling_AllowsAdaptorAdjust(t *testing.T) {
 	truncate(t)
 	ctx := context.Background()
 
 	const userID, tokenID, channelID = 30, 30, 30
 	const initQuota, preConsumed = 10000, 5000
+	const adaptorQuota = 2000
 	const tokenRemain = 8000
 
 	seedUser(t, userID, initQuota)
 	seedToken(t, tokenID, userID, "sk-percall-adaptor", tokenRemain)
+	seedChannel(t, channelID)
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.PrivateData.BillingContext.PerCallBilling = true
+
+	adaptor := &mockAdaptor{adjustReturn: adaptorQuota, allowPerCallAdjust: true}
+	taskResult := &relaycommon.TaskInfo{Status: model.TaskStatusSuccess}
+
+	settleTaskBillingOnComplete(ctx, adaptor, task, taskResult)
+
+	// Per-call only skips token fallback; explicit adaptor usage billing still settles.
+	assert.Equal(t, initQuota+(preConsumed-adaptorQuota), getUserQuota(t, userID))
+	assert.Equal(t, tokenRemain+(preConsumed-adaptorQuota), getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, adaptorQuota, task.Quota)
+	assert.Equal(t, int64(1), countLogs(t))
+}
+
+func TestSettle_PerCallBilling_SkipsAdaptorAdjustByDefault(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID = 33, 33, 33
+	const initQuota, preConsumed = 10000, 5000
+	const tokenRemain = 8000
+
+	seedUser(t, userID, initQuota)
+	seedToken(t, tokenID, userID, "sk-percall-default", tokenRemain)
 	seedChannel(t, channelID)
 
 	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
@@ -705,13 +1149,12 @@ func TestSettle_PerCallBilling_SkipsAdaptorAdjust(t *testing.T) {
 
 	settleTaskBillingOnComplete(ctx, adaptor, task, taskResult)
 
-	// Per-call: no adjustment despite adaptor returning 2000
+	// Per-call billing remains globally protected unless the adaptor explicitly opts in.
 	assert.Equal(t, initQuota, getUserQuota(t, userID))
 	assert.Equal(t, tokenRemain, getTokenRemainQuota(t, tokenID))
 	assert.Equal(t, preConsumed, task.Quota)
 	assert.Equal(t, int64(0), countLogs(t))
 }
-
 func TestSettle_PerCallBilling_SkipsTotalTokens(t *testing.T) {
 	truncate(t)
 	ctx := context.Background()
@@ -755,7 +1198,7 @@ func TestSettle_NonPerCall_AdaptorAdjustWorks(t *testing.T) {
 	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
 	// PerCallBilling defaults to false
 
-	adaptor := &mockAdaptor{adjustReturn: adaptorQuota}
+	adaptor := &mockAdaptor{adjustReturn: adaptorQuota, allowPerCallAdjust: true}
 	taskResult := &relaycommon.TaskInfo{Status: model.TaskStatusSuccess}
 
 	settleTaskBillingOnComplete(ctx, adaptor, task, taskResult)

@@ -1,11 +1,16 @@
 package channel
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -190,4 +195,95 @@ func TestProcessHeaderOverride_PassHeadersTemplateSetsRuntimeHeaders(t *testing.
 	require.Equal(t, "Codex CLI", upstreamReq.Header.Get("Originator"))
 	require.Equal(t, "sess-123", upstreamReq.Header.Get("Session_id"))
 	require.Empty(t, upstreamReq.Header.Get("X-Codex-Beta-Features"))
+}
+func TestDoTaskApiRequestAppliesHeaderOverride(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+	service.InitHttpClient()
+
+	var gotDataInspection string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotDataInspection = r.Header.Get("X-DashScope-DataInspection")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/video/generations", strings.NewReader(`{}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			HeadersOverride: map[string]any{
+				"X-DashScope-DataInspection": "disable",
+			},
+		},
+	}
+
+	resp, err := DoTaskApiRequest(mockTaskAdaptor{url: server.URL}, ctx, info, strings.NewReader(`{}`))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, "disable", gotDataInspection)
+}
+
+type mockTaskAdaptor struct {
+	url string
+}
+
+func (m mockTaskAdaptor) Init(*relaycommon.RelayInfo) {}
+
+func (m mockTaskAdaptor) ValidateRequestAndSetAction(*gin.Context, *relaycommon.RelayInfo) *dto.TaskError {
+	return nil
+}
+
+func (m mockTaskAdaptor) EstimateBilling(*gin.Context, *relaycommon.RelayInfo) map[string]float64 {
+	return nil
+}
+
+func (m mockTaskAdaptor) AdjustBillingOnSubmit(*relaycommon.RelayInfo, []byte) map[string]float64 {
+	return nil
+}
+
+func (m mockTaskAdaptor) AdjustBillingOnComplete(*model.Task, *relaycommon.TaskInfo) int {
+	return 0
+}
+
+func (m mockTaskAdaptor) BuildRequestURL(*relaycommon.RelayInfo) (string, error) {
+	return m.url, nil
+}
+
+func (m mockTaskAdaptor) BuildRequestHeader(_ *gin.Context, req *http.Request, _ *relaycommon.RelayInfo) error {
+	req.Header.Set("X-DashScope-Async", "enable")
+	return nil
+}
+
+func (m mockTaskAdaptor) BuildRequestBody(*gin.Context, *relaycommon.RelayInfo) (io.Reader, error) {
+	return strings.NewReader(`{}`), nil
+}
+
+func (m mockTaskAdaptor) DoRequest(*gin.Context, *relaycommon.RelayInfo, io.Reader) (*http.Response, error) {
+	return nil, nil
+}
+
+func (m mockTaskAdaptor) DoResponse(*gin.Context, *http.Response, *relaycommon.RelayInfo) (string, []byte, *dto.TaskError) {
+	return "", nil, nil
+}
+
+func (m mockTaskAdaptor) GetModelList() []string {
+	return nil
+}
+
+func (m mockTaskAdaptor) GetChannelName() string {
+	return "mock"
+}
+
+func (m mockTaskAdaptor) FetchTask(string, string, map[string]any, string) (*http.Response, error) {
+	return nil, nil
+}
+
+func (m mockTaskAdaptor) ParseTaskResult([]byte) (*relaycommon.TaskInfo, error) {
+	return nil, nil
 }
