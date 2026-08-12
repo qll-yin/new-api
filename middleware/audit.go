@@ -93,7 +93,7 @@ var auditRouteActions = map[string]string{
 	"POST /api/subscription/admin/bind":     "subscription.bind",
 
 	// 日志
-	"DELETE /api/log/": "log.clear",
+	"POST /api/system-task/log-cleanup": "log.cleanup_start",
 }
 
 // beginAdminAudit 在管理/root 写操作进入 handler 前包装 ResponseWriter，
@@ -155,13 +155,14 @@ func finishAdminAudit(c *gin.Context, writer *auditResponseWriter) {
 		opParams["route"] = route
 	}
 
-	// content 为英文兜底文本（导出/经典前端用）。
+	// content 为英文兜底文本（供导出等非本地化消费者使用）。
 	content := method + " " + route
 
 	adminInfo := map[string]interface{}{
 		"admin_id":       operatorId,
 		"admin_username": operatorName,
 		"admin_role":     operatorRole,
+		"auth_method":    auditAuthMethod(c),
 	}
 	auditInfo := map[string]interface{}{
 		"method":  method,
@@ -177,6 +178,13 @@ func finishAdminAudit(c *gin.Context, writer *auditResponseWriter) {
 	gopool.Go(func() {
 		model.RecordOperationAuditLog(operatorId, content, ip, action, opParams, adminInfo, auditInfo)
 	})
+}
+
+func auditAuthMethod(c *gin.Context) string {
+	if c.GetBool("use_access_token") {
+		return "access_token"
+	}
+	return "session"
 }
 
 // auditResponseSuccess 依据 HTTP 状态码与响应体推断操作是否成功。

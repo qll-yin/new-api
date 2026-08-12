@@ -56,7 +56,10 @@ const (
 	ChannelTypeReplicate      = 56
 	ChannelTypeCodex          = 57
 	ChannelTypeAliBailian     = 58 // 阿里云百炼（DashScope HappyHorse 视频生成）
-	ChannelTypeDummy               // this one is only for count, do not add any channel after this
+	ChannelTypeAdvancedCustom = 59
+	ChannelTypeSub2API        = 60
+	ChannelTypeNewAPI         = 61
+	ChannelTypeDummy          // this one is only for count, do not add any channel after this
 
 )
 
@@ -120,6 +123,10 @@ var ChannelBaseURLs = []string{
 	"https://api.replicate.com",                 //56
 	"https://chatgpt.com",                       //57
 	"",                                          //58 阿里云百炼：管理员需填入含 WorkspaceId 的专属域名，如 https://{WorkspaceId}.ap-southeast-1.maas.aliyuncs.com
+	"",                                          //60
+	"",                                          //59
+	"",                                          //60
+	"",                                          //61
 }
 
 var ChannelTypeNames = map[int]string{
@@ -178,6 +185,9 @@ var ChannelTypeNames = map[int]string{
 	ChannelTypeReplicate:      "Replicate",
 	ChannelTypeCodex:          "ChatGPT Subscription (Codex)",
 	ChannelTypeAliBailian:     "AliBailian",
+	ChannelTypeAdvancedCustom: "Advanced Custom",
+	ChannelTypeSub2API:        "Sub2API",
+	ChannelTypeNewAPI:         "New API",
 }
 
 func GetChannelTypeName(channelType int) string {
